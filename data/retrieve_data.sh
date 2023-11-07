@@ -4,8 +4,8 @@ echo "Retrieving token"
 
 client_key=""
 secret_key=""
-realm_id=""
-auction_house_id=""
+realm_id="4408"
+auction_house_id="2"
 
 token=`curl -u $client_key:$secret_key -d grant_type=client_credentials https://us.battle.net/oauth/token | jq -r '.access_token'`
 
