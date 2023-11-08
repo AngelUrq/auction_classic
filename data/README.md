@@ -77,10 +77,11 @@ Running the script manually can be useful for testing, troubleshooting, or retri
 - It stores the retrieved data in a JSON file in the specified location. The data includes the fields `auctionId`, `itemId`, `buyout`, `bid`, and `quantity` for each item being sold. The data retrieved from the World of Warcraft API contains the following fields, each providing information about an item currently listed on the auction house:
 
 1. `id`: A unique identifier for each auction listing. This ID is used to differentiate between different auctions and track specific listings.
-2. `itemId`: The identifier of the item being sold. This corresponds to a specific in-game item, and you can use this ID to look up item details like name, quality, and item level.
+2. `item_id`: The identifier of the item being sold. This corresponds to a specific in-game item, and you can use this ID to look up item details like name, quality, and item level.
 3. `buyout`: The "buyout" price for the item, which represents the fixed price at which a buyer can immediately purchase the item and end the auction. This is often expressed in in-game currency (e.g., gold, silver, copper).
 4. `bid`: The current bid amount for the item, which represents the minimum amount a bidder needs to offer to participate in the auction. Bidders can place higher bids to compete with other potential buyers.
 5. `quantity`: The number of items available in the auction listing. It indicates how many instances of the item are being sold within the same auction.
+6. `time_left`: Time left in auction. An expired item is send back to the seller.
 
 These fields are crucial for understanding and evaluating the current status of items on the auction house, and they provide valuable information for players and developers looking to interact with the World of Warcraft economy.
 
