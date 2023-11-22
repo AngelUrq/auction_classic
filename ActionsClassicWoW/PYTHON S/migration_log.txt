@@ -1,0 +1,50 @@
+INFO:root:Iniciando migración de datos para la tabla Auctions...
+INFO:root:Procesando archivo: 20231105T21.json
+WARNING:root:Entrada duplicada encontrada para 20231105T21.json. Puedes considerar la actualización.
+INFO:root:Procesando archivo: 20231105T08.json
+WARNING:root:Entrada duplicada encontrada para 20231105T08.json. Puedes considerar la actualización.
+INFO:root:Procesando archivo: 20231105T03.json
+WARNING:root:Entrada duplicada encontrada para 20231105T03.json. Puedes considerar la actualización.
+INFO:root:Procesando archivo: 20231105T11.json
+WARNING:root:Entrada duplicada encontrada para 20231105T11.json. Puedes considerar la actualización.
+INFO:root:Procesando archivo: 20231105T09.json
+WARNING:root:Entrada duplicada encontrada para 20231105T09.json. Puedes considerar la actualización.
+INFO:root:Procesando archivo: 20231105T14.json
+WARNING:root:Entrada duplicada encontrada para 20231105T14.json. Puedes considerar la actualización.
+INFO:root:Procesando archivo: 20231105T07.json
+WARNING:root:Entrada duplicada encontrada para 20231105T07.json. Puedes considerar la actualización.
+INFO:root:Procesando archivo: 20231105T00.json
+WARNING:root:Entrada duplicada encontrada para 20231105T00.json. Puedes considerar la actualización.
+INFO:root:Procesando archivo: 20231105T12.json
+WARNING:root:Entrada duplicada encontrada para 20231105T12.json. Puedes considerar la actualización.
+INFO:root:Procesando archivo: 20231105T22.json
+WARNING:root:Entrada duplicada encontrada para 20231105T22.json. Puedes considerar la actualización.
+INFO:root:Procesando archivo: 20231105T19.json
+WARNING:root:Entrada duplicada encontrada para 20231105T19.json. Puedes considerar la actualización.
+INFO:root:Procesando archivo: 20231105T15.json
+WARNING:root:Entrada duplicada encontrada para 20231105T15.json. Puedes considerar la actualización.
+INFO:root:Procesando archivo: 20231105T04.json
+WARNING:root:Entrada duplicada encontrada para 20231105T04.json. Puedes considerar la actualización.
+INFO:root:Procesando archivo: 20231105T13.json
+WARNING:root:Entrada duplicada encontrada para 20231105T13.json. Puedes considerar la actualización.
+INFO:root:Procesando archivo: 20231105T06.json
+WARNING:root:Entrada duplicada encontrada para 20231105T06.json. Puedes considerar la actualización.
+INFO:root:Procesando archivo: 20231105T05.json
+WARNING:root:Entrada duplicada encontrada para 20231105T05.json. Puedes considerar la actualización.
+INFO:root:Procesando archivo: 20231105T18.json
+WARNING:root:Entrada duplicada encontrada para 20231105T18.json. Puedes considerar la actualización.
+INFO:root:Procesando archivo: 20231105T17.json
+WARNING:root:Entrada duplicada encontrada para 20231105T17.json. Puedes considerar la actualización.
+INFO:root:Procesando archivo: 20231105T02.json
+WARNING:root:Entrada duplicada encontrada para 20231105T02.json. Puedes considerar la actualización.
+INFO:root:Procesando archivo: 20231105T16.json
+WARNING:root:Entrada duplicada encontrada para 20231105T16.json. Puedes considerar la actualización.
+INFO:root:Procesando archivo: 20231105T10.json
+WARNING:root:Entrada duplicada encontrada para 20231105T10.json. Puedes considerar la actualización.
+INFO:root:Procesando archivo: 20231105T01.json
+WARNING:root:Entrada duplicada encontrada para 20231105T01.json. Puedes considerar la actualización.
+INFO:root:Procesando archivo: 20231105T20.json
+WARNING:root:Entrada duplicada encontrada para 20231105T20.json. Puedes considerar la actualización.
+INFO:root:Procesando archivo: 20231105T23.json
+WARNING:root:Entrada duplicada encontrada para 20231105T23.json. Puedes considerar la actualización.
+INFO:root:Migración de datos para la tabla Auctions completada.
