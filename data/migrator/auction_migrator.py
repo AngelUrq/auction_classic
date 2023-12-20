@@ -8,14 +8,14 @@ def main():
     parser = argparse.ArgumentParser(description='Process auction data.')
     parser.add_argument('--data_dir', type=str, required=True, help='Path to the directory containing the JSON files')
     args = parser.parse_args()
-    config = json.load(open("config.json", "r"))#database
+    config = json.load(open("config.json", "r"))  # database
     
-    #Connect to the database using values from config.json
+    # Connect to the database using values from config.json
     db = mysql.connector.connect(**config["database"])
 
     cursor = db.cursor()
 
-    #Iterate through all JSON files in the data directory and its subdirectories
+    # Iterate through all JSON files in the data directory and its subdirectories
     for root, dirs, files in os.walk(args.data_dir):
         for filename in files:
             if filename.endswith(".json"):
@@ -28,23 +28,27 @@ def main():
 
                 print(f"Processing file: {filepath}")
 
-                #Extract the auction timestamp from the filename
+                # Extract the auction timestamp from the filename
                 auction_record = datetime.strptime(filename[:-5], "%Y%m%dT%H")
 
-                #Prepare auction data for insertion
-                auctions_data = [(auction["id"], auction["bid"], auction["buyout"], auction["quantity"], auction["time_left"]) for auction in data["auctions"]]
+                # Prepare auction data for insertion
+                auctions_data = [
+                    (auction["id"], auction["bid"], auction["buyout"], auction["quantity"], auction["time_left"], auction["item"]["id"])
+                    for auction in data["auctions"]
+                ]
                 action_events_data = [(auction["id"], auction_record.strftime('%Y-%m-%d %H:%M:%S')) for auction in data["auctions"]]
 
-                #Insert auction data into the Auctions table
+                # Insert auction data into the Auctions table
                 try:
                     cursor.executemany("""
-                        INSERT INTO Auctions (auction_id, bid, buyout, quantity, time_left)
-                        VALUES (%s, %s, %s, %s, %s)
+                        INSERT INTO Auctions (auction_id, bid, buyout, quantity, time_left, item_id)
+                        VALUES (%s, %s, %s, %s, %s, %s)
                         ON DUPLICATE KEY UPDATE
                             bid = VALUES(bid),
                             buyout = VALUES(buyout),
                             quantity = VALUES(quantity),
-                            time_left = VALUES(time_left)
+                            time_left = VALUES(time_left),
+                            item_id = VALUES(item_id)
                     """, auctions_data)
                     db.commit()
                     print(f"Auction data from file {filepath} successfully inserted into Auctions.")
@@ -52,7 +56,7 @@ def main():
                     db.rollback()
                     print(f"Error inserting auction data for file {filepath} in Auctions: {err}")
 
-                #Insert data into ActionEvents
+                # Insert data into ActionEvents
                 try:
                     cursor.executemany("""
                         INSERT INTO ActionEvents (auction_id, record)
@@ -66,9 +70,10 @@ def main():
                     db.rollback()
                     print(f"Error inserting auction events for file {filepath} in ActionEvents: {err}")
 
-    #Close the cursor and the database connection
+    # Close the cursor and the database connection
     cursor.close()
     db.close()
 
-if __name__ == "__main__":#add main 
+if __name__ == "__main__":
     main()
+
