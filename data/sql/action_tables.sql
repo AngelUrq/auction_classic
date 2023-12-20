@@ -1,4 +1,4 @@
--- Crear la tabla Items
+-- Create the Items table
 CREATE TABLE Items (
   item_id INT PRIMARY KEY,
   item_name VARCHAR(100),
@@ -15,7 +15,7 @@ CREATE TABLE Items (
   is_stackable INT
 );
 
--- Crear la tabla Auctions
+-- Create the Auctions table
 CREATE TABLE Auctions (
   auction_id INT PRIMARY KEY,
   bid INT,
@@ -24,11 +24,10 @@ CREATE TABLE Auctions (
   time_left VARCHAR(20)
 );
 
--- Crear la tabla ActionEvents
+-- Create the ActionEvents table
 CREATE TABLE ActionEvents (
   auction_id INT,
   record DATETIME,
   PRIMARY KEY (auction_id, record),
   FOREIGN KEY (auction_id) REFERENCES Auctions(auction_id)
 );
-
