@@ -21,8 +21,10 @@ CREATE TABLE Auctions (
   bid INT,
   buyout INT,
   quantity INT,
-  time_left VARCHAR(20)
+  time_left VARCHAR(20),
+  item_id INT
 );
+
 
 -- Create the ActionEvents table
 CREATE TABLE ActionEvents (
