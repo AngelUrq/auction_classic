@@ -1,96 +1,77 @@
-import os
+import argparse
 import json
 import mysql.connector
-import logging
+import os
+from datetime import datetime
 
-# Configure logs
-logging.basicConfig(filename='migration_log.txt', level=logging.INFO)
+parser = argparse.ArgumentParser(description='Process auction data.')
+parser.add_argument('--data_dir', type=str, required=True, help='Path to the directory containing the JSON files')
+args = parser.parse_args()
+config = json.load(open("config.json", "r"))#database
 
-def migrate_data(json_directory, table_name, conn):
-    cursor = conn.cursor()
+#Connect to the database using values from config.json
+db = mysql.connector.connect(**config["database"])
 
-    # Log start
-    logging.info(f"Starting data migration for table {table_name}...")
+cursor = db.cursor()
 
-    try:
-        # Iterate over all JSON files in the directory
-        for filename in os.listdir(json_directory):
+try:
+    #Iterate through all JSON files in the data directory and its subdirectories
+    for root, dirs, files in os.walk(args.data_dir):
+        for filename in files:
             if filename.endswith(".json"):
-                logging.info(f"Processing file: {filename}")
-                with open(os.path.join(json_directory, filename), 'r') as file:
-                    try:
-                        # Load JSON data from the file
-                        data = json.load(file)
-                        logging.info(f"Data loaded from {filename}: {data}")
+                filepath = os.path.join(root, filename)
+                try:
+                    data = json.load(open(filepath, "r"))
+                except (FileNotFoundError, json.JSONDecodeError) as e:
+                    print(f"Error reading file {filepath}: {e}")
+                    continue
 
-                        # Access auction data nested under the 'item' key
-                        item_data = data.get('item', {})
+                print(f"Processing file: {filepath}")
 
-                        # Use the unique ID from the file as the auction identifier
-                        auction_id = data.get('id')
+                #Extract the auction timestamp from the filename
+                auction_record = datetime.strptime(filename[:-5], "%Y%m%dT%H")
 
-                        if auction_id is not None:
-                            # Check if the entry already exists in the database
-                            query_check_duplicate = f"SELECT 1 FROM {table_name} WHERE auction_id = %s"
-                            cursor.execute(query_check_duplicate, (auction_id,))
-                            result = cursor.fetchone()
+                #Prepare auction data for insertion
+                auctions_data = [(auction["id"], auction["bid"], auction["buyout"], auction["quantity"], auction["time_left"]) for auction in data["auctions"]]
+                action_events_data = [(auction["id"], auction_record.strftime('%Y-%m-%d %H:%M:%S')) for auction in data["auctions"]]
 
-                            if result:
-                                # Duplicate entry found, consider updating.
-                                logging.warning(f"Duplicate entry found for {filename}. Consider updating.")
-                            else:
-                                # Build insertion query with parameters
-                                query_insert = f"""
-                                INSERT INTO {table_name} (auction_id, item_id, buyout, bid, quantity, time_left)
-                                VALUES (%s, %s, %s, %s, %s, %s)
-                                """
+                #Insert auction data into the Auctions table
+                cursor.executemany("""
+                    INSERT INTO Auctions (auction_id, bid, buyout, quantity, time_left)
+                    VALUES (%s, %s, %s, %s, %s)
+                    ON DUPLICATE KEY UPDATE
+                        bid = VALUES(bid),
+                        buyout = VALUES(buyout),
+                        quantity = VALUES(quantity),
+                        time_left = VALUES(time_left)
+                """, auctions_data)
 
-                                # Execute insertion query with parameters
-                                cursor.execute(query_insert, (
-                                    auction_id,
-                                    item_data.get('id', None),
-                                    data.get('buyout', None),
-                                    data.get('bid', None),
-                                    data.get('quantity', None),
-                                    data.get('time_left', None)
-                                ))
+                #Confirm transaction
+                db.commit()
+                print(f"Auction data from file {filepath} successfully inserted into Auctions.")
 
-                                # Confirm changes after processing the file (optional)
-                                conn.commit()
+                #Insert data into ActionEvents
+                try:
+                    cursor.executemany("""
+                        INSERT INTO ActionEvents (auction_id, record)
+                        VALUES (%s, %s)
+                        ON DUPLICATE KEY UPDATE
+                            record = VALUES(record)
+                    """, action_events_data)
 
-                                logging.info(f"Successful insertion for {filename}")
-                        else:
-                            logging.warning(f"Key 'id' not found or is None in file {filename}")
+                    #Confirm transaction
+                    db.commit()
+                    print(f"Auction events for file {filepath} successfully inserted in ActionEvents.")
 
-                    except (json.JSONDecodeError, mysql.connector.Error, KeyError) as e:
-                        logging.error(f"Error in file {filename}: {e}")
+                except mysql.connector.Error as err:
+                    #Revert transaction in case of error
+                    db.rollback()
+                    print(f"Error inserting auction events for file {filepath} in ActionEvents: {err}")
 
-        # Confirm changes at the end of processing
-        conn.commit()
+except mysql.connector.Error as err:
+    print(f"MySQL connection error: {err}")
 
-        # Log completion
-        logging.info(f"Data migration for table {table_name} completed.")
-
-    except mysql.connector.Error as err:
-        # Handle MySQL connection or SQL query execution errors
-        logging.error(f"MySQL Error: {err}")
-
-    finally:
-        # Close connection and cursor in the 'finally' block to ensure it's closed even if an exception occurs
-        cursor.close()
-        conn.close()
-
-# Connect to the MySQL database
-conn = mysql.connector.connect(
-    host="127.0.0.1",
-    user="root",
-    password="12792",  # Your password here
-    database="AuctionDB"  # Changed to the correct database name
-)
-
-# Path to the directory containing JSON files
-json_directory = "/home/cmiranda/Documents/ActionsClassicWoW/WOW Sql/05-11-2023"
-
-# Migrate data for the Auctions table
-migrate_data(json_directory, "Auctions", conn)
-
+finally:
+    #Close the cursor and the database connection
+    cursor.close()
+    db.close()
