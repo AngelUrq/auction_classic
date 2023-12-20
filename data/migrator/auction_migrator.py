@@ -3,6 +3,7 @@ import json
 import mysql.connector
 import os
 from datetime import datetime
+from tqdm import tqdm
 
 def main():
     parser = argparse.ArgumentParser(description='Process auction data.')
@@ -17,7 +18,7 @@ def main():
 
     # Iterate through all JSON files in the data directory and its subdirectories
     for root, dirs, files in os.walk(args.data_dir):
-        for filename in files:
+        for filename in tqdm(files):
             if filename.endswith(".json"):
                 filepath = os.path.join(root, filename)
                 try:
