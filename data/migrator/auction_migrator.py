@@ -4,17 +4,17 @@ import mysql.connector
 import os
 from datetime import datetime
 
-parser = argparse.ArgumentParser(description='Process auction data.')
-parser.add_argument('--data_dir', type=str, required=True, help='Path to the directory containing the JSON files')
-args = parser.parse_args()
-config = json.load(open("config.json", "r"))#database
+def main():
+    parser = argparse.ArgumentParser(description='Process auction data.')
+    parser.add_argument('--data_dir', type=str, required=True, help='Path to the directory containing the JSON files')
+    args = parser.parse_args()
+    config = json.load(open("config.json", "r"))#database
+    
+    #Connect to the database using values from config.json
+    db = mysql.connector.connect(**config["database"])
 
-#Connect to the database using values from config.json
-db = mysql.connector.connect(**config["database"])
+    cursor = db.cursor()
 
-cursor = db.cursor()
-
-try:
     #Iterate through all JSON files in the data directory and its subdirectories
     for root, dirs, files in os.walk(args.data_dir):
         for filename in files:
@@ -36,19 +36,21 @@ try:
                 action_events_data = [(auction["id"], auction_record.strftime('%Y-%m-%d %H:%M:%S')) for auction in data["auctions"]]
 
                 #Insert auction data into the Auctions table
-                cursor.executemany("""
-                    INSERT INTO Auctions (auction_id, bid, buyout, quantity, time_left)
-                    VALUES (%s, %s, %s, %s, %s)
-                    ON DUPLICATE KEY UPDATE
-                        bid = VALUES(bid),
-                        buyout = VALUES(buyout),
-                        quantity = VALUES(quantity),
-                        time_left = VALUES(time_left)
-                """, auctions_data)
-
-                #Confirm transaction
-                db.commit()
-                print(f"Auction data from file {filepath} successfully inserted into Auctions.")
+                try:
+                    cursor.executemany("""
+                        INSERT INTO Auctions (auction_id, bid, buyout, quantity, time_left)
+                        VALUES (%s, %s, %s, %s, %s)
+                        ON DUPLICATE KEY UPDATE
+                            bid = VALUES(bid),
+                            buyout = VALUES(buyout),
+                            quantity = VALUES(quantity),
+                            time_left = VALUES(time_left)
+                    """, auctions_data)
+                    db.commit()
+                    print(f"Auction data from file {filepath} successfully inserted into Auctions.")
+                except mysql.connector.Error as err:
+                    db.rollback()
+                    print(f"Error inserting auction data for file {filepath} in Auctions: {err}")
 
                 #Insert data into ActionEvents
                 try:
@@ -58,20 +60,15 @@ try:
                         ON DUPLICATE KEY UPDATE
                             record = VALUES(record)
                     """, action_events_data)
-
-                    #Confirm transaction
                     db.commit()
                     print(f"Auction events for file {filepath} successfully inserted in ActionEvents.")
-
                 except mysql.connector.Error as err:
-                    #Revert transaction in case of error
                     db.rollback()
                     print(f"Error inserting auction events for file {filepath} in ActionEvents: {err}")
 
-except mysql.connector.Error as err:
-    print(f"MySQL connection error: {err}")
-
-finally:
     #Close the cursor and the database connection
     cursor.close()
     db.close()
+
+if __name__ == "__main__":#add main 
+    main()
