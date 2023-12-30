@@ -1,5 +1,5 @@
 
-CREATE TEMPORARY TABLE TempAuctions AS
+CREATE TEMPORARY TABLE AuctionsHours AS
 SELECT
     a.auction_id,
     a.bid / 10000 AS bid_in_gold,
@@ -12,42 +12,49 @@ SELECT
     MIN(ae.record) AS first_appearance_timestamp
 FROM Auctions a
 JOIN ActionEvents ae ON a.auction_id = ae.auction_id
-GROUP BY a.auction_id;
+GROUP BY a.auction_id
+LIMIT 50;
 
-CREATE TEMPORARY TABLE TempAuctionsSameTime AS
+CREATE TEMPORARY TABLE AuctionsCount AS
 SELECT
-    ta.auction_id,
+    ah.auction_id,
     COUNT(DISTINCT a.auction_id) AS auctions_at_same_time
-FROM TempAuctions ta
-JOIN Auctions a ON ta.item_id = a.item_id
-GROUP BY ta.auction_id;
+FROM AuctionsHours ah
+JOIN Auctions a ON ah.item_id = a.item_id
+GROUP BY ah.auction_id
+LIMIT 50;
 
-CREATE TEMPORARY TABLE TempAvgCompetitorUnitPrice AS
+CREATE TEMPORARY TABLE AuctionsPrice AS
 SELECT
-    ta.auction_id,
-    AVG(ta.unit_price) AS avg_competitor_unit_price,
-    MIN(ta.unit_price) AS min_competitor_unit_price
-FROM TempAuctions ta
-JOIN Auctions a ON ta.item_id = a.item_id AND ta.auction_id <> a.auction_id
-GROUP BY ta.auction_id;
+    ah.auction_id,
+    AVG(a.unit_price) AS avg_competitor_unit_price,
+    MIN(a.unit_price) AS min_competitor_unit_price
+FROM Auctions a
+JOIN AuctionsHours ah ON ah.item_id = a.item_id AND ah.auction_id <> a.auction_id
+JOIN ActionEvents ae ON a.auction_id = ae.auction_id
+WHERE HOUR(ae.record) = HOUR(ah.first_appearance_timestamp)
+GROUP BY ah.auction_id
+LIMIT 50;
 
 SELECT
-    ta.auction_id,
-    ta.bid_in_gold,
-    ta.buyout_in_gold,
-    ta.unit_price,
-    ta.quantity,
-    ta.time_left,
-    ta.item_id,
-    ta.hours_on_sale,
-    ta.first_appearance_timestamp,
-    YEAR(ta.first_appearance_timestamp) AS appearance_year,
-    MONTH(ta.first_appearance_timestamp) AS appearance_month,
-    DAY(ta.first_appearance_timestamp) AS appearance_day,
-    HOUR(ta.first_appearance_timestamp) AS appearance_hour,
-    tst.auctions_at_same_time,
-    acup.avg_competitor_unit_price,
-    acup.min_competitor_unit_price
-FROM TempAuctions ta
-JOIN TempAuctionsSameTime tst ON ta.auction_id = tst.auction_id
-JOIN TempAvgCompetitorUnitPrice acup ON ta.auction_id = acup.auction_id;
+    ah.auction_id,
+    ah.bid_in_gold,
+    ah.buyout_in_gold,
+    ah.unit_price,
+    ah.quantity,
+    ah.time_left,
+    ah.item_id,
+    ah.hours_on_sale,
+    ah.first_appearance_timestamp,
+    YEAR(ah.first_appearance_timestamp) AS appearance_year,
+    MONTH(ah.first_appearance_timestamp) AS appearance_month,
+    DAY(ah.first_appearance_timestamp) AS appearance_day,
+    HOUR(ah.first_appearance_timestamp) AS appearance_hour,
+    ac.auctions_at_same_time,
+    ap.avg_competitor_unit_price,
+    ap.min_competitor_unit_price
+FROM AuctionsHours ah
+JOIN AuctionsCount ac ON ah.auction_id = ac.auction_id
+JOIN AuctionsPrice ap ON ah.auction_id = ap.auction_id
+LIMIT 50;
+
