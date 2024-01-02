@@ -1,4 +1,3 @@
-
 CREATE TEMPORARY TABLE AuctionsHours AS
 SELECT
     a.auction_id,
@@ -13,7 +12,7 @@ SELECT
 FROM Auctions a
 JOIN ActionEvents ae ON a.auction_id = ae.auction_id
 GROUP BY a.auction_id
-LIMIT 50;
+LIMIT 100;
 
 CREATE TEMPORARY TABLE AuctionsCount AS
 SELECT
@@ -22,19 +21,17 @@ SELECT
 FROM AuctionsHours ah
 JOIN Auctions a ON ah.item_id = a.item_id
 GROUP BY ah.auction_id
-LIMIT 50;
+LIMIT 100;
 
 CREATE TEMPORARY TABLE AuctionsPrice AS
 SELECT
     ah.auction_id,
-    AVG(a.unit_price) AS avg_competitor_unit_price,
-    MIN(a.unit_price) AS min_competitor_unit_price
-FROM Auctions a
-JOIN AuctionsHours ah ON ah.item_id = a.item_id AND ah.auction_id <> a.auction_id
-JOIN ActionEvents ae ON a.auction_id = ae.auction_id
-WHERE HOUR(ae.record) = HOUR(ah.first_appearance_timestamp)
+    AVG(a.buyout / 10000 / a.quantity) AS avg_competitor_unit_price,
+    MIN(a.buyout / 10000 / a.quantity) AS min_competitor_unit_price
+FROM AuctionsHours ah
+JOIN Auctions a ON ah.item_id = a.item_id AND ah.auction_id <> a.auction_id
 GROUP BY ah.auction_id
-LIMIT 50;
+LIMIT 100;
 
 SELECT
     ah.auction_id,
@@ -56,5 +53,4 @@ SELECT
 FROM AuctionsHours ah
 JOIN AuctionsCount ac ON ah.auction_id = ac.auction_id
 JOIN AuctionsPrice ap ON ah.auction_id = ap.auction_id
-LIMIT 50;
-
+LIMIT 100;
