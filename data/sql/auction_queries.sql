@@ -7,7 +7,6 @@ SELECT
     a.quantity,
     a.time_left,
     a.item_id,
-    COUNT(*) AS hours_on_sale,
     MIN(ae.record) AS first_appearance_timestamp
 FROM Auctions a
 JOIN ActionEvents ae ON a.auction_id = ae.auction_id
@@ -16,8 +15,7 @@ LIMIT 100;
 
 CREATE TEMPORARY TABLE AuctionsCount AS
 SELECT
-    ah.auction_id,
-    COUNT(DISTINCT a.auction_id) AS auctions_at_same_time
+    ah.auction_id
 FROM AuctionsHours ah
 JOIN Auctions a ON ah.item_id = a.item_id
 GROUP BY ah.auction_id
@@ -25,9 +23,7 @@ LIMIT 100;
 
 CREATE TEMPORARY TABLE AuctionsPrice AS
 SELECT
-    ah.auction_id,
-    AVG(a.buyout / 10000 / a.quantity) AS avg_competitor_unit_price,
-    MIN(a.buyout / 10000 / a.quantity) AS min_competitor_unit_price
+    ah.auction_id
 FROM AuctionsHours ah
 JOIN Auctions a ON ah.item_id = a.item_id AND ah.auction_id <> a.auction_id
 GROUP BY ah.auction_id
@@ -41,15 +37,11 @@ SELECT
     ah.quantity,
     ah.time_left,
     ah.item_id,
-    ah.hours_on_sale,
     ah.first_appearance_timestamp,
     YEAR(ah.first_appearance_timestamp) AS appearance_year,
     MONTH(ah.first_appearance_timestamp) AS appearance_month,
     DAY(ah.first_appearance_timestamp) AS appearance_day,
-    HOUR(ah.first_appearance_timestamp) AS appearance_hour,
-    ac.auctions_at_same_time,
-    ap.avg_competitor_unit_price,
-    ap.min_competitor_unit_price
+    HOUR(ah.first_appearance_timestamp) AS appearance_hour
 FROM AuctionsHours ah
 JOIN AuctionsCount ac ON ah.auction_id = ac.auction_id
 JOIN AuctionsPrice ap ON ah.auction_id = ap.auction_id
