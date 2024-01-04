@@ -1,5 +1,3 @@
-
-
 SELECT
     a.auction_id,
     a.bid / 10000 AS bid_in_gold,
@@ -12,4 +10,4 @@ SELECT
     COUNT(*) AS hours_on_sale
 FROM Auctions a
 JOIN ActionEvents ae ON a.auction_id = ae.auction_id
-GROUP BY a.auction_id
+GROUP BY a.auction_id;
