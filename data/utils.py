@@ -1,7 +1,6 @@
 import json
 import requests
 import datetime
-import pyodbc
 import time
 import os
 import math
