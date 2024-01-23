@@ -1,0 +1,10 @@
+{
+    "client_key": "",
+    "secret_key": "",
+    "realm_id": 4408,
+    "auction_house_id": 6,
+    "db_host": "127.0.0.1",
+    "db_user": "root",
+    "db_password": "password",
+    "db_name": "auction_db"
+}

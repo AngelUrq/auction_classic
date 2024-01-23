@@ -45,10 +45,6 @@ def main():
                         INSERT INTO Auctions (auction_id, bid, buyout, quantity, time_left, item_id)
                         VALUES (%s, %s, %s, %s, %s, %s)
                         ON DUPLICATE KEY UPDATE
-                            bid = VALUES(bid),
-                            buyout = VALUES(buyout),
-                            quantity = VALUES(quantity),
-                            time_left = VALUES(time_left),
                             item_id = VALUES(item_id)
                     """, auctions_data)
                     db.commit()
