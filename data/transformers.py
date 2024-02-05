@@ -133,7 +133,47 @@ class RelativeDifferencesTransformer(BaseEstimator, TransformerMixin):
         return X
 
 
-def transform_data(df, numerical_columns, categorical_columns_ordinal, categorical_columns_onehot):
+def transform_data(df):
+    numerical_columns = [
+        'quantity',
+        'unit_price',
+        'bid_in_gold',
+        'buyout_in_gold',
+        'time_left',
+        'median_buyout_price',
+        'median_bid_price',
+        'median_unit_price',
+        'lowest_competitor_price',
+        'avg_competitor_price',
+        'std_competitor_price',
+        'top_competitor_price',
+        'competitor_count',
+        'rank_buyout_price',
+        'rank_bid_price',
+        'rank_unit_price',
+        'relative_price_difference',
+        'relative_avg_price_difference',
+        'relative_buyout_difference',
+        'relative_bid_difference',
+        'relative_price_to_lowest_competitor',
+        'relative_price_to_top_competitor',
+        'purchase_price_gold',
+        'sell_price_gold',
+        'required_level',
+        'item_level'
+    ]
+
+    categorical_columns_ordinal = [
+        'item_id',
+        'quality',
+        'item_class',
+        'item_subclass'
+    ]
+
+    categorical_columns_onehot = [
+    'is_stackable'
+    ]
+
     column_transformer = make_column_transformer(
         (OrdinalEncoder(), categorical_columns_ordinal),
         (OneHotEncoder(sparse_output=False), categorical_columns_onehot),
