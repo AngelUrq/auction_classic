@@ -14,6 +14,8 @@ class TimeLeftTransformer(BaseEstimator, TransformerMixin):
         X['time_left'] = np.where(X['time_left'] == 'MEDIUM', 2, X['time_left'])
         X['time_left'] = np.where(X['time_left'] == 'LONG', 12, X['time_left'])
         X['time_left'] = np.where(X['time_left'] == 'VERY_LONG', 48, X['time_left'])
+
+
         return X
 
 class MedianCompetitorPriceTransformer(BaseEstimator, TransformerMixin):
@@ -35,13 +37,12 @@ class MedianCompetitorPriceTransformer(BaseEstimator, TransformerMixin):
         return X
 
 class AvgCompetitorPriceTransformer(BaseEstimator, TransformerMixin):
-    def __init__(self):
-        pass
-
     def fit(self, X, y=None):
         return self
 
     def transform(self, X):
+        print(X.head())
+         
         avg_competitor_price = X.groupby(by=['item_id', 'first_appearance_year', 'first_appearance_month', 'first_appearance_day'])['unit_price'].mean().reset_index(name='avg_competitor_price')
         std_competitor_price = X.groupby(by=['item_id', 'first_appearance_year', 'first_appearance_month', 'first_appearance_day'])['unit_price'].std().reset_index(name='std_competitor_price')
 
