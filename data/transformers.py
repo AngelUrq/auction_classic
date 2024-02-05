@@ -1,6 +1,10 @@
 import pandas as pd
-from sklearn.base import BaseEstimator, TransformerMixin
 import numpy as np
+from sklearn.base import BaseEstimator, TransformerMixin
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import OrdinalEncoder, StandardScaler, OneHotEncoder
+from sklearn.compose import make_column_transformer
+
 
 class TimeLeftTransformer(BaseEstimator, TransformerMixin):
     def __init__(self):
@@ -15,6 +19,7 @@ class TimeLeftTransformer(BaseEstimator, TransformerMixin):
         X['time_left'] = np.where(X['time_left'] == 'LONG', 12, X['time_left'])
         X['time_left'] = np.where(X['time_left'] == 'VERY_LONG', 48, X['time_left'])
         return X
+
 
 class MedianCompetitorPriceTransformer(BaseEstimator, TransformerMixin):
     def __init__(self):
@@ -33,6 +38,7 @@ class MedianCompetitorPriceTransformer(BaseEstimator, TransformerMixin):
         X['rank_unit_price'] = X.groupby(by=['item_id', 'first_appearance_year', 'first_appearance_month', 'first_appearance_day'])['unit_price'].rank(ascending=True)
 
         return X
+
 
 class AvgCompetitorPriceTransformer(BaseEstimator, TransformerMixin):
     def __init__(self):
@@ -82,7 +88,6 @@ class MinCompetitorPriceTransformer(BaseEstimator, TransformerMixin):
         return X
 
 
-
 class TopCompetitorPriceTransformer(BaseEstimator, TransformerMixin):
     def __init__(self):
         pass
@@ -95,7 +100,6 @@ class TopCompetitorPriceTransformer(BaseEstimator, TransformerMixin):
         X = pd.merge(X, top_competitor_price, on=['item_id', 'first_appearance_year', 'first_appearance_month', 'first_appearance_day'], how='left')
         X['top_competitor_price'] = X['top_competitor_price'].fillna(0)
         return X
-
 
 
 class RelativeDifferencesTransformer(BaseEstimator, TransformerMixin):
@@ -126,3 +130,29 @@ class RelativeDifferencesTransformer(BaseEstimator, TransformerMixin):
 
 
         return X
+
+
+def transform_data(df, numerical_columns, categorical_columns_ordinal, categorical_columns_onehot):
+    column_transformer = make_column_transformer(
+        (OrdinalEncoder(), categorical_columns_ordinal),
+        (OneHotEncoder(sparse_output=False), categorical_columns_onehot),
+        remainder='passthrough'
+    )
+
+    preprocessing_pipeline = Pipeline(steps=[
+        ('time_left', TimeLeftTransformer()),
+        ('median_competitor_price', MedianCompetitorPriceTransformer()),
+        ('avg_competitor_price', AvgCompetitorPriceTransformer()),
+        ('competitor_count', CompetitorCountTransformer()),
+        ('min_competitor_price', MinCompetitorPriceTransformer()),
+        ('top_competitor_price', TopCompetitorPriceTransformer()),
+        ('relative_differences', RelativeDifferencesTransformer()),
+    ])
+
+    df_transformed = preprocessing_pipeline.fit_transform(df)
+    df_transformed = df_transformed[numerical_columns + categorical_columns_ordinal + categorical_columns_onehot]
+
+    X = column_transformer.fit_transform(df_transformed)
+    y = df['hours_on_sale']
+
+    return X, y
