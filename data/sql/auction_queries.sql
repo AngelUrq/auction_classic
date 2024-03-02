@@ -1,8 +1,8 @@
 SELECT
     a.auction_id,
-    a.bid / 10000 AS bid_in_gold,
-    a.buyout / 10000 AS buyout_in_gold,
-    (a.buyout / 10000) / a.quantity AS unit_price,
+    a.bid / 10000.0 AS bid_in_gold,
+    a.buyout / 10000.0 AS buyout_in_gold,
+    (a.buyout / 10000.0) / a.quantity AS unit_price,
     a.quantity,
     a.time_left,
     a.item_id,

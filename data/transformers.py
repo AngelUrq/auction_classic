@@ -126,11 +126,11 @@ def transform_data(df):
     'purchase_price_gold',
     'sell_price_gold',
     'required_level',
-    'item_level'
+    'item_level',
+    'item_id'
   ]
 
   categorical_columns_ordinal = [
-    'item_id',
     'quality',
     'item_class',
     'item_subclass'
