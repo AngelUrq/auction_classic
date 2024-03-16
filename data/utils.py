@@ -14,12 +14,12 @@ def create_access_token(client_id, client_secret, region='us'):
 
 
 def retrieve_from_api(config):
-    response = create_access_token(config['CLIENT_KEY'], config['SECRET_KEY'])
+    response = create_access_token(config['client_key'], config['secret_key'])
     token = response['access_token']
     print('Token created')
 
     response = requests.get('https://us.api.blizzard.com/data/wow/connected-realm/{}/auctions/{}?namespace=dynamic-classic-us&locale=en_US&access_token={}'.format(
-        config['connected_realm_id'], config['auction_house_id'], token))
+        config['realm_id'], config['auction_house_id'], token))
 
     print('Request done')
 
@@ -42,7 +42,7 @@ def process_auction(auction):
 
 
 def get_auction_data():
-    config_path = os.path.join(os.path.dirname(__file__), 'config.json')
+    config_path = "C:/Users/jgdui/Documents/Trabajo/auctiondblocal/migrator/config.json"
 
     with open(config_path) as json_data:
         config = json.load(json_data)
@@ -59,13 +59,14 @@ def get_auction_data():
     return auctions
 
 
+
 def get_item_data():
     config_path = os.path.join(os.path.dirname(__file__), 'config.json')
     
     with open(config_path) as json_data:
         config = json.load(json_data)
 
-    response = create_access_token(config['CLIENT_KEY'], config['SECRET_KEY'])
+    response = create_access_token(config['client_key'], config['secret_key'])
     token = response['access_token']
 
     result = get_missing_items(config)
