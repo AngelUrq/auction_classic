@@ -25,4 +25,14 @@ FROM Auctions a
 JOIN ActionEvents ae ON a.auction_id = ae.auction_id
 JOIN Items i on i.item_id = a.item_id
 GROUP BY a.auction_id
-HAVING DATE(first_appearance_timestamp) NOT IN ('2023-11-16', '2023-11-17', '2023-12-15', '2023-12-16')
+HAVING DATE(first_appearance_timestamp) NOT IN (
+    '2023-11-16', 
+    '2023-11-17', 
+    '2023-11-18',
+    '2023-11-19',
+    '2023-11-20',
+    '2023-11-21',
+    '2023-11-22',
+    '2023-11-23',
+    '2024-03-1', 
+    '2024-03-2')
