@@ -33,6 +33,10 @@ Before using this script, make sure you have the following prerequisites in plac
    ```bash
    crontab -e
    ```
+For instance:
+```bash
+   0 * * * * bash /home/pi/Source/Bash/auctions/retrieve_data.sh
+ ```
 
 Now, the script will automatically run every hour, retrieve auction house data, and save it in the specified JSON file.
 
