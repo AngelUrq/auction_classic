@@ -2,6 +2,7 @@ import argparse
 import json
 import mysql.connector
 import os
+import time
 from datetime import datetime
 from tqdm import tqdm
 
@@ -30,6 +31,9 @@ def main():
 
     json_files = list(file_info.keys())
 
+    for file in json_files:
+        print(file)
+
     for filepath in tqdm(json_files):
         try:
             with open(filepath, "r") as file:
@@ -50,6 +54,7 @@ def main():
         action_events_data = [(auction["id"], auction_record.strftime('%Y-%m-%d %H:%M:%S')) for auction in data["auctions"]]
 
         try:
+            start_time = time.time()
             cursor.executemany("""
                 INSERT INTO Auctions (auction_id, bid, buyout, quantity, time_left, item_id)
                 VALUES (%s, %s, %s, %s, %s, %s)
@@ -57,12 +62,16 @@ def main():
                     item_id = VALUES(item_id)
             """, auctions_data)
             db.commit()
-            print(f"Auction data from file {filepath} successfully inserted into Auctions.")
+
+            end_time = time.time()
+            print(f"Auction data for file {filepath} successfully inserted in Auctions. Time taken: {end_time - start_time:.2f} seconds. Number of records: {len(auctions_data)}")
         except mysql.connector.Error as err:
             db.rollback()
             print(f"Error inserting auction data for file {filepath} in Auctions: {err}")
 
         try:
+            start_time = time.time()
+            
             cursor.executemany("""
                 INSERT INTO ActionEvents (auction_id, record)
                 VALUES (%s, %s)
@@ -70,7 +79,10 @@ def main():
                     record = VALUES(record)
             """, action_events_data)
             db.commit()
-            print(f"Auction events for file {filepath} successfully inserted in ActionEvents.")
+
+            end_time = time.time()
+
+            print(f"Auction events for file {filepath} successfully inserted in ActionEvents. Time taken: {end_time - start_time:.2f} seconds. Number of records: {len(action_events_data)}")
         except mysql.connector.Error as err:
             db.rollback()
             print(f"Error inserting auction events for file {filepath} in ActionEvents: {err}")
