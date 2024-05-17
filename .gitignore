@@ -8,6 +8,7 @@ __pycache__/
 *$py.class
 *.db
 *.pkl
+*.xlsx
 
 # C extensions
 *.so
