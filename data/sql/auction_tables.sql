@@ -21,7 +21,6 @@ CREATE TABLE Auctions (
   bid INT,
   buyout INT,
   quantity INT,
-  time_left VARCHAR(20),
   item_id INT
 );
 
@@ -30,6 +29,7 @@ CREATE TABLE Auctions (
 CREATE TABLE ActionEvents (
   auction_id INT,
   record DATETIME,
+  time_left VARCHAR(20),
   PRIMARY KEY (auction_id, record),
   FOREIGN KEY (auction_id) REFERENCES Auctions(auction_id)
 );
