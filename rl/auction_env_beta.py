@@ -20,9 +20,10 @@ class AuctionEnv(gym.Env):
 
         self.gold = initial_gold
         self.current_step = 0
+
         self.action_space = spaces.Box(low=0, high=1000000, shape=(1,), dtype=np.float32)
         self.observation_space = spaces.Box(low=0, high=np.inf, shape=(20,), dtype=np.float32)
-        
+
         self.model = pickle.load(open('forest_model.pkl', 'rb'))
         self.items_df = pd.read_csv('data/items.csv')
         self.auctions_df = self.load_data('20231104T13.json')
@@ -107,27 +108,28 @@ class AuctionEnv(gym.Env):
             new_item_data = auction.copy()
             new_item_data['buyout_in_gold'] = action[0]
             new_item_data['unit_price'] = action[0] / quantity
-            
-            temp_auctions_df = self.auctions_df.copy()
-            temp_auctions_df = temp_auctions_df.drop(index=self.current_step)
-            temp_auctions_df = pd.concat([temp_auctions_df, pd.DataFrame([new_item_data])], ignore_index=True)
-            
-            start_time = time.time()
+
+            temp_auctions_df = pd.concat([self.auctions_df, pd.DataFrame([new_item_data])], ignore_index=True)
             temp_auctions_df = add_features(temp_auctions_df)
-            elapsed_time = time.time() - start_time
-            print(f"Time to add features: {elapsed_time:.2f} seconds")
             
             categorical_columns = ['quality', 'item_class', 'item_subclass', 'is_stackable']
             temp_auctions_df[categorical_columns] = temp_auctions_df[categorical_columns].astype(str)
             
             X, _ = transform_data(temp_auctions_df)
-            predicted_hours = self.model.predict(X[-1].reshape(1, -1))[0]
-            print(f"Predicted hours: {predicted_hours:.2f}")
+            X_new = X[-1].reshape(1, -1)
 
+            print("Features of new_item_df:", temp_auctions_df.columns)
+            print("Model expects", self.model.n_features_in_, "features")
+
+            if X_new.shape[1] != self.model.n_features_in_:
+                print("Current features:", X_new)
+                raise ValueError(f"Model expects {self.model.n_features_in_} features, but got {X_new.shape[1]}")
+
+            predicted_hours = self.model.predict(X_new)[0]
             sale_probability = np.exp(-self.lambda_value * predicted_hours)
             print(f"Sale probability: {sale_probability:.2f}")
             sold = random.random() < sale_probability
-            
+
             if sold:
                 reward = action[0] - buyout_price
                 self.gold += reward
@@ -143,10 +145,10 @@ class AuctionEnv(gym.Env):
             print(f"Step {self.current_step}: Not enough gold to buy. Action: {action[0]}, Total cost: {total_cost}, Gold: {self.gold}")
             self.current_step += 1
             done = self.current_step >= len(self.auctions_df)
-        
+
         observation = self._get_obs()
         info = self._get_info()
-        
+
         print(f"State after step {self.current_step}: Gold: {self.gold}, Reward: {reward}")
         return observation, reward, done, False, info
 
@@ -155,7 +157,6 @@ class AuctionEnv(gym.Env):
 
     def close(self):
         pass
-
 
 from gymnasium.envs.registration import register
 
