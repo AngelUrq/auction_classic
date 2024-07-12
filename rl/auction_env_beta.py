@@ -1,217 +1,183 @@
 import gymnasium as gym
 from gymnasium import spaces
 import numpy as np
-import json
-import os
-import random
-from datetime import datetime
 import pandas as pd
+import json
 import pickle
+from datetime import datetime
+import random
+import time
+import warnings
+from transformers import add_features, transform_data
 
-LAMBDA = 0.0401
-items_df = pd.read_csv('data/items.csv')
-model = pickle.load(open('forest_model.pkl', 'rb'))
-
-def load_and_prepare_data_from_json(item_data=None):
-    try:
-        with open(os.path.join(os.path.dirname(__file__), '20231104T13.json'), 'r') as file:
-            auction_data = json.load(file).get('auctions', [])
-        
-        if not auction_data:
-            raise ValueError("No auction data found in the JSON file.")
-        df = pd.DataFrame(auction_data)
-        if item_data:
-            df = pd.concat([df, pd.DataFrame([item_data])], ignore_index=True)
-        
-        current_timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-        df['first_appearance_timestamp'] = current_timestamp
-        df['first_appearance_year'] = int(current_timestamp[:4])
-        df['first_appearance_month'] = int(current_timestamp[5:7])
-        df['first_appearance_day'] = int(current_timestamp[8:10])
-        df['first_appearance_hour'] = int(current_timestamp[11:13])
-        df['hours_on_sale'] = 0
-        df['unit_price'] = df['buyout_in_gold'] / df['quantity']
-        df['unit_price'].fillna(0, inplace=True)
-        df = df.merge(items_df, on='item_id', how='inner')
-        df = add_features(df)
-        X, _ = transform_data(df)
-
-        df['predicted_hours'] = model.predict(X)
-        return df
-    except (FileNotFoundError, json.JSONDecodeError) as e:
-        print(f"Error loading and preparing data: {e}")
-        return None
-    except Exception as e:
-        print(f"Unexpected error: {e}")
-        return None
-
-def convert_prediction_to_probability(predicted_hours):
-    return np.exp(-LAMBDA * predicted_hours)
-
-def predict_item_sale(item, quantity, buyout, bid, time_left_hours, num_simulations=100):
-    try:
-        item_id = int(item)
-        if item_id not in items_df['item_id'].values:
-            return "Error: The item is not found in the database. Please check the data."
-
-        item_data = {
-            'auction_id': 0,
-            'item_id': item_id,
-            'quantity': quantity,
-            'buyout_in_gold': buyout,
-            'bid_in_gold': bid,
-            'time_left': time_left_hours
-        }
-
-        probabilities = []
-        for _ in range(num_simulations):
-            df = load_and_prepare_data_from_json(item_data)
-            if df is not None:
-                predicted_hours = df['predicted_hours'].iloc[-1]
-                probability = convert_prediction_to_probability(predicted_hours)
-                probabilities.append(probability)
-
-        average_probability = np.mean(probabilities)
-        return f"The average sale probability of the item within the allowed time is {average_probability * 100:.2f}%."
-    except ValueError:
-        return "Error: The item ID must be an integer."
-    except Exception as e:
-        return f"Error calculating sale probability: {e}"
-
-if "AuctionEnv-v0" not in gym.envs.registry.keys():
-    gym.register(id="AuctionEnv-v0", entry_point="__main__:AuctionEnv")
+warnings.filterwarnings('ignore')
 
 class AuctionEnv(gym.Env):
-    metadata = {"render_modes": [], "render_fps": 4}
+    metadata = {"render_modes": ["human"], "render_fps": 4}
 
-    def __init__(self, json_file="20231104T13.json", starting_gold=1000, auction_house_type="Faction"):
-        super().__init__()
-        self.action_space = spaces.Box(low=0, high=np.inf, shape=(1,), dtype=np.float32)
-        self.observation_space = spaces.Box(
-            low=np.array([0, 0, 0, 0, 0, 0, 0, 0], dtype=np.float32),
-            high=np.array([np.inf, np.inf, np.inf, 48, np.inf, np.inf, np.inf, np.inf], dtype=np.float32)
-        )
-        try:
-            with open(os.path.join(os.path.dirname(__file__), json_file), 'r') as file:
-                data = json.load(file)
-                self.auction_data = data.get("auctions", [])
-                if not self.auction_data:
-                    raise ValueError("The JSON file does not contain auction data.")
-        except (FileNotFoundError, json.JSONDecodeError) as e:
-            print(f"Error loading auction data: {e}")
-            self.auction_data = []
-        except Exception as e:
-            print(f"Unexpected error: {e}")
-            self.auction_data = []
+    def __init__(self, initial_gold=1000, render_mode=None):
+        super(AuctionEnv, self).__init__()
 
-        self._validate_auction_data()
-        self.starting_gold = starting_gold
-        self.auction_house_type = auction_house_type
-        self.auction_fee = 0.1
-        self.deposit_fees = {
-            "Faction": {12: 0.15, 24: 0.30, 48: 0.60},
-            "Neutral": {12: 0.75, 24: 1.50, 48: 3.00}
-        }
-        self.time_left_mapping = {'SHORT': 12, 'MEDIUM': 24, 'LONG': 48, 'VERY_LONG': 48}
+        self.gold = initial_gold
+        self.current_step = 0
+        self.action_space = spaces.Box(low=0, high=1000000, shape=(1,), dtype=np.float32)
+        self.observation_space = spaces.Box(low=0, high=np.inf, shape=(20,), dtype=np.float32)
+        
+        self.model = pickle.load(open('forest_model.pkl', 'rb'))
+        self.items_df = pd.read_csv('data/items.csv')
+        self.auctions_df = self.load_data('20231104T13.json')
+        
+        self.lambda_value = 0.0401
+        
+        assert render_mode is None or render_mode in self.metadata["render_modes"]
+        self.render_mode = render_mode
+        self.window = None
+        self.clock = None
+        
         self.reset()
-    def _validate_auction_data(self):
-        required_keys = ["id", "item", "bid", "buyout", "quantity", "time_left"]
-        for i, auction in enumerate(self.auction_data):
-            if not isinstance(auction, dict):
-                raise ValueError(f"The auction at index {i} is not a valid dictionary.")
-            for key in required_keys:
-                if key not in auction:
-                    raise ValueError(f"The auction at index {i} does not have the key '{key}'.")
-                if key == "item" and ("id" not in auction["item"] or not isinstance(auction["item"], dict)):
-                    raise ValueError(f"The item in the auction {i} does not have a valid ID.")
 
-    def _calculate_reward(self, action, state):
-        buyout_price = state[2]
-        time_left = state[3]
-        merchant_sell_value = state[7]
-        item_cost = state[6] * state[5]
+    def load_data(self, filename='20231104T13.json'):
+        with open(filename, 'r') as f:
+            data = json.load(f)
 
-        if action[0] <= 0:
-            return 0
-        if action[0] < buyout_price:
-            return -10
+        extracted_data = []
+        for item in data["auctions"]:
+            extracted_data.append({
+                'auction_id': item['id'],
+                'item_id': item['item']['id'],
+                'bid_in_gold': item['bid'],
+                'buyout_in_gold': item['buyout'],
+                'quantity': item['quantity'],
+                'time_left': item['time_left']
+            })
 
-        selling_price = action[0]
-        probability_of_selling = max(0, 1 - (selling_price / (buyout_price + 1e-6)))
-        sold = random.random() < probability_of_selling
+        df = pd.DataFrame(extracted_data)
+        auction_record = datetime.strptime(filename[:-5], "%Y%m%dT%H")
+        df['first_appearance_timestamp'] = auction_record
+        df['first_appearance_year'] = auction_record.year
+        df['first_appearance_month'] = auction_record.month
+        df['first_appearance_day'] = auction_record.day
+        df['first_appearance_hour'] = auction_record.hour
+        df['hours_on_sale'] = 0
+        df['unit_price'] = df['buyout_in_gold'] / df['quantity']
+        df['item_id'] = df['item_id'].astype(str)
+        self.items_df['item_id'] = self.items_df['item_id'].astype(str)
+        df = df.merge(self.items_df, on='item_id', how='left')
+        df = df.fillna(0)
+        return df
 
-        deposit_fee_percentage = self.deposit_fees.get(self.auction_house_type, {}).get(time_left, 0)
-        deposit_fee = merchant_sell_value * deposit_fee_percentage
+    def _get_obs(self):
+        if self.current_step >= len(self.auctions_df):
+            return np.zeros(self.observation_space.shape)
+        auction = self.auctions_df.iloc[self.current_step]
+        return auction.to_numpy()
 
-        if self.gold < deposit_fee:
-            return -20
-        self.gold -= deposit_fee
-        auction_fee = self.auction_fee * selling_price if sold else 0
-        profit = selling_price - auction_fee - item_cost if sold else -deposit_fee - item_cost
-        reward = profit
-        if profit < -50:
-            reward -= 50
-        self.episode_profits.append(profit)
-        return reward
-
-    def _get_auction_state(self, auction_index):
-        auction_info = self.auction_data[auction_index]
-
-        item_id = auction_info.get('item', {}).get('id', 0)
-        buyout_price = auction_info.get('buyout', 0)
-        time_left = self.time_left_mapping.get(auction_info.get('time_left', 'SHORT'), 12)
-        bid = auction_info.get('bid', 0)
-        quantity = auction_info.get('quantity', 1)
-        unit_price = buyout_price / quantity if quantity > 0 else 0
-        item_row = items_df[items_df['item_id'] == item_id]
-        merchant_sell_value = (item_row['sell_price_gold'].values[0] + item_row['sell_price_silver'].values[0] / 100) if not item_row.empty else 0
-        state = np.array([
-            self.gold, item_id, buyout_price, time_left, bid, quantity, unit_price,
-            merchant_sell_value,
-        ], dtype=np.float32)
-
-        if not self.observation_space.contains(state):
-            raise ValueError(f"The observation {state} is out of the observation space.")
-        return state
+    def _get_info(self):
+        return {
+            "current_step": self.current_step,
+            "gold": self.gold
+        }
 
     def reset(self, seed=None, options=None):
         super().reset(seed=seed)
-        self.gold = self.starting_gold
-        self.episode_profits = []
-        self.current_auction = random.randrange(len(self.auction_data))
-        observation = self._get_auction_state(self.current_auction)
-        
-        if not self.observation_space.contains(observation):
-            raise ValueError(f"The observation {observation} is out of the observation space.")
-        return observation, {}
+        self.gold = 1000
+        self.current_step = 0
+        self.auctions_df = self.load_data('20231104T13.json')
+        observation = self._get_obs()
+        info = self._get_info()
+        return observation, info
 
     def step(self, action):
-        auction_data = self._get_auction_state(self.current_auction)
-        reward = self._calculate_reward(action, auction_data)
-        self.current_auction += 1
+        if self.current_step >= len(self.auctions_df):
+            done = True
+            reward = -100
+            print(f"Step {self.current_step}: No more auctions left. Ending episode.")
+            return self._get_obs(), reward, done, False, self._get_info()
 
-        terminated = self.gold <= 0 or self.current_auction >= len(self.auction_data)
-        truncated = False
-        info = {'gold': self.gold}
-        observation = self._get_auction_state(self.current_auction) if not terminated else None
-        return observation, reward, terminated, truncated, info
-    
+        auction = self.auctions_df.iloc[self.current_step]
+        buyout_price = auction['buyout_in_gold']
+        quantity = auction['quantity']
+        total_cost = buyout_price * quantity
+
+        print(f"Current gold: {self.gold}")
+        print(f"Buyout price: {buyout_price}, Quantity: {quantity}, Total cost: {total_cost}")
+        print(f"Action taken (bid price): {action[0]}")
+
+        if action[0] > 0 and self.gold >= total_cost:
+            new_item_data = auction.copy()
+            new_item_data['buyout_in_gold'] = action[0]
+            new_item_data['unit_price'] = action[0] / quantity
+            
+            temp_auctions_df = self.auctions_df.copy()
+            temp_auctions_df = temp_auctions_df.drop(index=self.current_step)
+            temp_auctions_df = pd.concat([temp_auctions_df, pd.DataFrame([new_item_data])], ignore_index=True)
+            
+            start_time = time.time()
+            temp_auctions_df = add_features(temp_auctions_df)
+            elapsed_time = time.time() - start_time
+            print(f"Time to add features: {elapsed_time:.2f} seconds")
+            
+            categorical_columns = ['quality', 'item_class', 'item_subclass', 'is_stackable']
+            temp_auctions_df[categorical_columns] = temp_auctions_df[categorical_columns].astype(str)
+            
+            X, _ = transform_data(temp_auctions_df)
+            predicted_hours = self.model.predict(X[-1].reshape(1, -1))[0]
+            print(f"Predicted hours: {predicted_hours:.2f}")
+
+            sale_probability = np.exp(-self.lambda_value * predicted_hours)
+            print(f"Sale probability: {sale_probability:.2f}")
+            sold = random.random() < sale_probability
+            
+            if sold:
+                reward = action[0] - buyout_price
+                self.gold += reward
+                print(f"Item sold. Reward: {reward}, Remaining gold: {self.gold}")
+            else:
+                reward = -buyout_price
+                print(f"Item not sold. Reward: {reward}, Remaining gold: {self.gold}")
+            
+            self.current_step += 1
+            done = self.current_step >= len(self.auctions_df)
+        else:
+            reward = -1
+            print(f"Step {self.current_step}: Not enough gold to buy. Action: {action[0]}, Total cost: {total_cost}, Gold: {self.gold}")
+            self.current_step += 1
+            done = self.current_step >= len(self.auctions_df)
+        
+        observation = self._get_obs()
+        info = self._get_info()
+        
+        print(f"State after step {self.current_step}: Gold: {self.gold}, Reward: {reward}")
+        return observation, reward, done, False, info
+
+    def render(self):
+        print(f'Step: {self.current_step}, Gold: {self.gold}')
+
+    def close(self):
+        pass
+
+
+from gymnasium.envs.registration import register
+
+register(
+    id='AuctionEnv-v0',
+    entry_point='__main__:AuctionEnv',
+    max_episode_steps=1000,
+)
+
 if __name__ == "__main__":
-    env = gym.make("AuctionEnv-v0")
-    observation, _ = env.reset()
+    env = gym.make('AuctionEnv-v0')
 
-    for step in range(len(env.auction_data)):
+    state, info = env.reset()
+
+    done = False
+    total_reward = 0
+
+    while not done:
         action = env.action_space.sample()
-        observation, reward, terminated, truncated, info = env.step(action)
-
-        print(f"Step {step + 1}:")
-        print(f"  Action (bid price): {action[0]:.2f}")
-        print(f"  Reward: {reward:.2f}")
-        print(f"  Current gold: {info['gold']:.2f}")
-
-        if terminated:
-            break
-    total_profit = sum(env.episode_profits)
-    print(f"\nEpisode finished. Total profit: {total_profit:.2f}, Final gold: {info['gold']:.2f}\n")
+        next_state, reward, done, truncated, info = env.step(action)
+        total_reward += reward
+        state = next_state
 
     env.close()
+    print(f'Total reward: {total_reward:.2f}')
