@@ -23,19 +23,20 @@ class AuctionEnv(gym.Env):
         self.current_step = 0
 
         self.action_space = spaces.Box(low=0, high=1000000, shape=(1,), dtype=np.float32)
+        
         self.observation_space = spaces.Box(low=0, high=np.inf, shape=(20,), dtype=np.float32)
-
+        
         self.model = pickle.load(open('forest_model.pkl', 'rb'))
         self.items_df = pd.read_csv('data/items.csv')
         self.auctions_df = self.load_data('20231104T13.json')
-
+        
         self.lambda_value = 0.0401
-
+        
         assert render_mode is None or render_mode in self.metadata["render_modes"]
         self.render_mode = render_mode
         self.window = None
         self.clock = None
-
+        
         self.reset()
 
     def load_data(self, filename='20231104T13.json'):
@@ -93,7 +94,7 @@ class AuctionEnv(gym.Env):
         if self.current_step >= len(self.auctions_df):
             done = True
             reward = -100
-            print(f"Step {self.current_step}: No more auctions. Ending episode.")
+            print(f"Step {self.current_step}: No more auctions left. Ending episode.")
             return self._get_obs(), reward, done, False, self._get_info()
 
         auction = self.auctions_df.iloc[self.current_step]
@@ -113,13 +114,13 @@ class AuctionEnv(gym.Env):
             temp_auctions_df = pd.concat([self.auctions_df, pd.DataFrame([new_item_data])], ignore_index=True)
 
             temp_auctions_df = add_features(temp_auctions_df)
-
+            
             categorical_columns = ['quality', 'item_class', 'item_subclass', 'is_stackable']
             temp_auctions_df[categorical_columns] = temp_auctions_df[categorical_columns].astype(str)
-
+            
             X, _ = transform_data(temp_auctions_df)
-            X_new = X[-1].reshape(1, -1)
-
+            X_new = X[-1].reshape(1, -1) 
+           
             if X_new.shape[1] != self.model.n_features_in_:
                 raise ValueError(f"The model expects {self.model.n_features_in_} features, but received {X_new.shape[1]}")
 
@@ -133,12 +134,13 @@ class AuctionEnv(gym.Env):
                 self.gold += reward
                 print(f"Item sold. Profit: {reward}, Remaining gold: {self.gold}")
             else:
-                reward = buyout_price - action[0]
-                self.gold -= reward
-                if self.gold <= 0:
-                    reward = self.bankruptcy_penalty
+                reward = -buyout_price
+                self.gold -= buyout_price
+                if self.gold <= 0: 
+                    self.gold += self.bankruptcy_penalty 
+                    reward += self.bankruptcy_penalty  
                 print(f"Item not sold. Loss: {reward}, Remaining gold: {self.gold}")
-
+            
             self.current_step += 1
             done = self.current_step >= len(self.auctions_df)
         else:
