@@ -118,27 +118,26 @@ class AuctionEnv(gym.Env):
             categorical_columns = ['quality', 'item_class', 'item_subclass', 'is_stackable']
             temp_auctions_df[categorical_columns] = temp_auctions_df[categorical_columns].astype(str)
             
+  
             X, _ = transform_data(temp_auctions_df)
-            X_new = X[-1].reshape(1, -1) 
-           
+            X_new = X[-1].reshape(1, -1)  
             if X_new.shape[1] != self.model.n_features_in_:
                 raise ValueError(f"The model expects {self.model.n_features_in_} features, but received {X_new.shape[1]}")
-
             predicted_hours = self.model.predict(X_new)[0]
             sale_probability = np.exp(-self.lambda_value * predicted_hours)
             print(f"Sale probability: {sale_probability:.2f}")
             sold = random.random() < sale_probability
 
             if sold:
-                reward = action[0] - buyout_price
+                reward = action[0] - total_cost
                 self.gold += reward
                 print(f"Item sold. Profit: {reward}, Remaining gold: {self.gold}")
             else:
-                reward = -buyout_price
-                self.gold -= buyout_price
+                reward = -total_cost
+                self.gold += reward
                 if self.gold <= 0: 
-                    self.gold += self.bankruptcy_penalty 
-                    reward += self.bankruptcy_penalty  
+                    reward += self.bankruptcy_penalty 
+                    self.gold += self.bankruptcy_penalty
                 print(f"Item not sold. Loss: {reward}, Remaining gold: {self.gold}")
             
             self.current_step += 1
