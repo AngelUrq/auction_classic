@@ -15,15 +15,16 @@ warnings.filterwarnings('ignore')
 class AuctionEnv(gym.Env):
     metadata = {"render_modes": ["human"], "render_fps": 4}
 
-    def __init__(self, initial_gold=1000, bankruptcy_penalty=-15000, render_mode=None):
+    def __init__(self, initial_gold=1000, bankruptcy_penalty=-15000, render_mode=None, auction_house="factioned", auction_duration=24):
         super(AuctionEnv, self).__init__()
 
         self.gold = initial_gold
         self.bankruptcy_penalty = bankruptcy_penalty
         self.current_step = 0
+        self.auction_house = auction_house
+        self.auction_duration = auction_duration
 
         self.action_space = spaces.Box(low=0, high=1000000, shape=(1,), dtype=np.float32)
-        
         self.observation_space = spaces.Box(low=0, high=np.inf, shape=(20,), dtype=np.float32)
         
         self.model = pickle.load(open('forest_model.pkl', 'rb'))
@@ -90,6 +91,23 @@ class AuctionEnv(gym.Env):
         info = self._get_info()
         return observation, info
 
+    def calculate_deposit(self, msv):
+        if self.auction_house == "factioned":
+            if self.auction_duration == 12:
+                return 0.15 * msv
+            elif self.auction_duration == 24:
+                return 0.30 * msv
+            elif self.auction_duration == 48:
+                return 0.60 * msv
+        elif self.auction_house == "neutral":
+            if self.auction_duration == 12:
+                return 0.75 * msv
+            elif self.auction_duration == 24:
+                return 1.50 * msv
+            elif self.auction_duration == 48:
+                return 3.00 * msv
+        return 0
+
     def step(self, action):
         if self.current_step >= len(self.auctions_df):
             done = True
@@ -101,6 +119,18 @@ class AuctionEnv(gym.Env):
         buyout_price = auction['buyout_in_gold']
         quantity = auction['quantity']
         total_cost = buyout_price * quantity
+        msv = auction['sell_price_gold']
+
+        deposit = self.calculate_deposit(msv)
+        print(f"Calculated deposit: {deposit}")
+
+        if self.gold < deposit:
+            reward = -1
+            self.current_step += 1
+            print(f"Step {self.current_step}: Not enough gold to cover the deposit. Gold: {self.gold}, Deposit: {deposit}")
+            return self._get_obs(), reward, False, False, self._get_info()
+        self.gold -= deposit
+        print(f"Deposit paid: {deposit}, Gold remaining after deposit: {self.gold}")
 
         print(f"Current gold: {self.gold}")
         print(f"Buyout price: {buyout_price}, Quantity: {quantity}, Total cost: {total_cost}")
@@ -112,15 +142,13 @@ class AuctionEnv(gym.Env):
             new_item_data['unit_price'] = action[0] / quantity
 
             temp_auctions_df = pd.concat([self.auctions_df, pd.DataFrame([new_item_data])], ignore_index=True)
-
             temp_auctions_df = add_features(temp_auctions_df)
-            
+        
             categorical_columns = ['quality', 'item_class', 'item_subclass', 'is_stackable']
             temp_auctions_df[categorical_columns] = temp_auctions_df[categorical_columns].astype(str)
-            
-  
             X, _ = transform_data(temp_auctions_df)
             X_new = X[-1].reshape(1, -1)  
+
             if X_new.shape[1] != self.model.n_features_in_:
                 raise ValueError(f"The model expects {self.model.n_features_in_} features, but received {X_new.shape[1]}")
             predicted_hours = self.model.predict(X_new)[0]
@@ -129,15 +157,16 @@ class AuctionEnv(gym.Env):
             sold = random.random() < sale_probability
 
             if sold:
-                reward = action[0] - total_cost
-                self.gold += reward
-                print(f"Item sold. Profit: {reward}, Remaining gold: {self.gold}")
+                reward = action[0] - buyout_price
+                auction_fee = 0.05 * action[0]  
+                self.gold += reward - auction_fee + deposit  
+                print(f"Item sold. Profit: {reward}, Auction house fee: {auction_fee}, Remaining gold: {self.gold}")
             else:
-                reward = -total_cost
-                self.gold += reward
+                reward = -buyout_price
+                self.gold -= buyout_price
                 if self.gold <= 0: 
-                    reward += self.bankruptcy_penalty 
-                    self.gold += self.bankruptcy_penalty
+                    self.gold = 0 
+                    reward += self.bankruptcy_penalty  
                 print(f"Item not sold. Loss: {reward}, Remaining gold: {self.gold}")
             
             self.current_step += 1
