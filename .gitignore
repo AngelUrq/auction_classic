@@ -14,6 +14,7 @@ __pycache__/
 *.so
 
 prediction_engine/data
+prediction_engine/sequences
 
 # Distribution / packaging
 .Python

@@ -36,3 +36,4 @@ class AuctionEnv(gym.Env):
     def close(self):
         # Clean up the environment's resources
         pass
+    
