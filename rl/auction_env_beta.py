@@ -6,7 +6,7 @@ import json
 import pickle
 from datetime import datetime
 import random
-import time
+import os
 import warnings
 from transformers import add_features, transform_data
 
@@ -15,21 +15,21 @@ warnings.filterwarnings('ignore')
 class AuctionEnv(gym.Env):
     metadata = {"render_modes": ["human"], "render_fps": 4}
 
-    def __init__(self, initial_gold=1000, bankruptcy_penalty=-15000, render_mode=None, auction_house="factioned", auction_duration=24):
+    def __init__(self, initial_gold=1000, penalizacion_quiebra=-15000, render_mode=None, auction_house="factioned", auction_duration=24):
         super(AuctionEnv, self).__init__()
 
         self.gold = initial_gold
-        self.bankruptcy_penalty = bankruptcy_penalty
+        self.penalizacion_quiebra = penalizacion_quiebra
         self.current_step = 0
         self.auction_house = auction_house
         self.auction_duration = auction_duration
 
         self.action_space = spaces.Box(low=0, high=1000000, shape=(1,), dtype=np.float32)
+        
         self.observation_space = spaces.Box(low=0, high=np.inf, shape=(20,), dtype=np.float32)
         
         self.model = pickle.load(open('forest_model.pkl', 'rb'))
         self.items_df = pd.read_csv('data/items.csv')
-        self.auctions_df = self.load_data('20231104T13.json')
         
         self.lambda_value = 0.0401
         
@@ -40,7 +40,7 @@ class AuctionEnv(gym.Env):
         
         self.reset()
 
-    def load_data(self, filename='20231104T13.json'):
+    def load_data(self, filename):
         with open(filename, 'r') as f:
             data = json.load(f)
 
@@ -56,7 +56,7 @@ class AuctionEnv(gym.Env):
             })
 
         df = pd.DataFrame(extracted_data)
-        auction_record = datetime.strptime(filename[:-5], "%Y%m%dT%H")
+        auction_record = datetime.strptime(filename.split(os.sep)[-2], "%d-%m-%Y")
         df['first_appearance_timestamp'] = auction_record
         df['first_appearance_year'] = auction_record.year
         df['first_appearance_month'] = auction_record.month
@@ -86,7 +86,13 @@ class AuctionEnv(gym.Env):
         super().reset(seed=seed)
         self.gold = 1000
         self.current_step = 0
-        self.auctions_df = self.load_data('20231104T13.json')
+        
+        base_path = 'auctions'
+        random_folder = random.choice(os.listdir(base_path))
+        random_json_file = os.path.join(base_path, random_folder, random.choice(os.listdir(os.path.join(base_path, random_folder))))
+        print(f"Selected JSON file: {random_json_file}")
+
+        self.auctions_df = self.load_data(random_json_file)
         observation = self._get_obs()
         info = self._get_info()
         return observation, info
@@ -118,39 +124,42 @@ class AuctionEnv(gym.Env):
         auction = self.auctions_df.iloc[self.current_step]
         buyout_price = auction['buyout_in_gold']
         quantity = auction['quantity']
-        total_cost = buyout_price * quantity
         msv = auction['sell_price_gold']
 
         deposit = self.calculate_deposit(msv)
         print(f"Calculated deposit: {deposit}")
 
-        if self.gold < deposit:
+        total_cost = buyout_price + deposit
+        if self.gold < total_cost:
             reward = -1
             self.current_step += 1
-            print(f"Step {self.current_step}: Not enough gold to cover the deposit. Gold: {self.gold}, Deposit: {deposit}")
+            print(f"Step {self.current_step}: Not enough gold to cover the deposit and total cost. Gold: {self.gold}, Total cost: {total_cost}")
             return self._get_obs(), reward, False, False, self._get_info()
+
         self.gold -= deposit
-        print(f"Deposit paid: {deposit}, Gold remaining after deposit: {self.gold}")
+        print(f"Deposit paid: {deposit}, Remaining gold after paying deposit: {self.gold}")
 
         print(f"Current gold: {self.gold}")
         print(f"Buyout price: {buyout_price}, Quantity: {quantity}, Total cost: {total_cost}")
         print(f"Action taken (bid price): {action[0]}")
 
-        if action[0] > 0 and self.gold >= total_cost:
+        if action[0] > 0 and self.gold >= total_cost - deposit:
             new_item_data = auction.copy()
             new_item_data['buyout_in_gold'] = action[0]
             new_item_data['unit_price'] = action[0] / quantity
 
             temp_auctions_df = pd.concat([self.auctions_df, pd.DataFrame([new_item_data])], ignore_index=True)
+
             temp_auctions_df = add_features(temp_auctions_df)
-        
+            
             categorical_columns = ['quality', 'item_class', 'item_subclass', 'is_stackable']
             temp_auctions_df[categorical_columns] = temp_auctions_df[categorical_columns].astype(str)
+            
             X, _ = transform_data(temp_auctions_df)
-            X_new = X[-1].reshape(1, -1)  
-
+            X_new = X[-1].reshape(1, -1) 
             if X_new.shape[1] != self.model.n_features_in_:
-                raise ValueError(f"The model expects {self.model.n_features_in_} features, but received {X_new.shape[1]}")
+                raise ValueError(f"The model expects {self.model.n_features_in_} features, but got {X_new.shape[1]}")
+
             predicted_hours = self.model.predict(X_new)[0]
             sale_probability = np.exp(-self.lambda_value * predicted_hours)
             print(f"Sale probability: {sale_probability:.2f}")
@@ -158,15 +167,14 @@ class AuctionEnv(gym.Env):
 
             if sold:
                 reward = action[0] - buyout_price
-                auction_fee = 0.05 * action[0]  
-                self.gold += reward - auction_fee + deposit  
-                print(f"Item sold. Profit: {reward}, Auction house fee: {auction_fee}, Remaining gold: {self.gold}")
+                self.gold += reward + deposit  
+                print(f"Item sold. Profit: {reward}, Remaining gold: {self.gold}")
             else:
                 reward = -buyout_price
                 self.gold -= buyout_price
                 if self.gold <= 0: 
-                    self.gold = 0 
-                    reward += self.bankruptcy_penalty  
+                    self.gold = 0  
+                    reward += self.penalizacion_quiebra  
                 print(f"Item not sold. Loss: {reward}, Remaining gold: {self.gold}")
             
             self.current_step += 1
@@ -188,7 +196,6 @@ class AuctionEnv(gym.Env):
 
     def close(self):
         pass
-
 from gymnasium.envs.registration import register
 
 register(
