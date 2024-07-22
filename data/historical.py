@@ -1,11 +1,12 @@
 import os
 import json
 import pandas as pd
+import numpy as np
 from datetime import datetime
 from tqdm import tqdm
 
-data_dir = 'auctions/'  
-output_path = 'historical/historical_prices.csv'  
+data_dir = 'rl/data/auctions/'  
+output_path = 'data/historical_prices.csv'  
 
 def process_json_file(filepath):
     records = []
@@ -25,15 +26,42 @@ def process_json_file(filepath):
         for auction in data['auctions']:
             if 'buyout' in auction and auction['buyout'] > 0:  
                 buyout_in_gold = auction['buyout'] / 10000.0
+                quantity = auction['quantity']
                 record = {
                     'datetime': date,
                     'item_id': auction['item']['id'],
-                    'price': buyout_in_gold
+                    'price': buyout_in_gold / quantity
                 }
                 records.append(record)
     else:
         print(f"Skipping file without 'auctions' key: {os.path.basename(filepath)}")
     return records
+
+def winsorized_mean(data, limits):
+    lower, upper = limits
+    
+    # Sort the data
+    sorted_data = data.sort_values()
+    
+    # Calculate the cutoff points
+    lower_cutoff = np.percentile(sorted_data, lower)
+    upper_cutoff = np.percentile(sorted_data, upper)
+    
+    # Winsorize the data
+    winsorized_data = np.clip(sorted_data, lower_cutoff, upper_cutoff)
+
+    # Calculate the mean of the winsorized data
+    return winsorized_data.mean()
+
+def compute_average_prices(records):
+    limits = (1, 75)  # Winsorize 10% from each end
+    # if we have less than 5 records, return median
+
+    if len(records) <= 5 and len(records) > 1:
+        return np.median(records)
+    
+    # if we have 5 or more records, return the winsorized mean
+    return winsorized_mean(records, limits)
 
 def calculate_and_save_average_prices(records, output_path, mode='a'):
     if not records:
@@ -47,11 +75,12 @@ def calculate_and_save_average_prices(records, output_path, mode='a'):
         return
     
     df['datetime'] = pd.to_datetime(df['datetime'])
-    df['hour'] = df['datetime'].dt.floor('h')  
-    
-    average_prices = df.groupby(['hour', 'item_id'])['price'].mean().reset_index()
+    df['hour'] = df['datetime'].dt.floor('h') 
+
+    average_prices = df.groupby(['hour', 'item_id'])['price'].apply(lambda x: compute_average_prices(x)).reset_index()
     average_prices = average_prices.rename(columns={'hour': 'datetime'})
     average_prices['datetime'] = average_prices['datetime'].dt.strftime('%Y-%m-%d %H:00:00')
+    
     header = True if mode == 'w' else False
     average_prices.to_csv(output_path, index=False, mode=mode, header=header)
 
@@ -71,7 +100,6 @@ def main():
         records = process_json_file(filepath)
         if records:
             calculate_and_save_average_prices(records, output_path, mode='a' if i > 0 else 'w')
-        print(f"Processed file {i + 1} / {len(all_file_paths)}")
 
 if __name__ == "__main__":
     main()
