@@ -133,14 +133,13 @@ def transform_data(df):
   categorical_columns_ordinal = [
     'quality',
     'item_class',
-    'item_subclass'
-  ]
-
-  categorical_columns_onehot = [
+    'item_subclass',
     'is_stackable'
   ]
 
-  X = df[numerical_columns + categorical_columns_ordinal + categorical_columns_onehot]
+  assert set(numerical_columns + categorical_columns_ordinal).issubset(df.columns)
+
+  X = df[numerical_columns + categorical_columns_ordinal]
   y = df['hours_on_sale']
 
   num_transformer = StandardScaler()
@@ -150,8 +149,6 @@ def transform_data(df):
   column_transformer = make_column_transformer(
       #(num_transformer, numerical_columns),
       (ordinal_transformer, categorical_columns_ordinal),
-      (onehot_transformer, categorical_columns_onehot),
-
       remainder='passthrough'
   )
 
