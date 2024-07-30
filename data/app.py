@@ -29,19 +29,16 @@ def load_and_prepare_data(item_data=None):
         df['first_appearance_hour'] = int(current_timestamp[11:13])
         df['hours_on_sale'] = 0
         df['unit_price'] = df['buyout_in_gold'] / df['quantity']
-
         df = df.merge(items_df, on='item_id', how='inner')
         df = df.drop(columns=['bid', 'buyout', 'max_count', 'sell_price_silver', 'purchase_price_silver'], errors='ignore')
 
-        df = add_features(df)
-        X, _ = transform_data(df)
-        df['prediction'] = model.predict(X)
         return df
     except Exception as e:
         print(f"Error loading and preparing data: {e}")
         return None
-    
+
 auction_data = load_and_prepare_data()
+
 def predict_item_sale(realm_id, faction, item, quantity, buyout, bid, time_left_hours):
     if not all([realm_id, faction, item, quantity, buyout, bid, time_left_hours]):
         return "Error: All fields are required and must contain valid data."
@@ -68,20 +65,55 @@ def predict_item_sale(realm_id, faction, item, quantity, buyout, bid, time_left_
     df = load_and_prepare_data(item_data)
     if df is None:
         return "Error: Could not retrieve auction data."
-    user_prediction = df['prediction'].iloc[-1]
+    df = add_features(df)
+    X, _ = transform_data(df)
+    user_prediction = model.predict(X)[-1] 
     if user_prediction < 8:
         return f"Your item will sell in approximately {user_prediction:.2f} hours."
     else:
         return f"Your item may take more than {user_prediction:.2f} hours to sell."
 
-def get_suggested_items(realm_id, faction, desired_profit):
+def get_suggested_items(realm_id, faction, desired_profit, item_class=None, item_subclass=None):
     if auction_data is not None:
-        auction_data['predicted_resale_price'] = auction_data['unit_price'] * (1 + desired_profit / 100)
-        auction_data['profit_margin'] = auction_data['predicted_resale_price'] - auction_data['buyout_in_gold']
-        suggested_items = auction_data[auction_data['profit_margin'] > 0]
-        return suggested_items[['item_name', 'item_class', 'unit_price', 'buyout_in_gold', 'predicted_resale_price', 'profit_margin', 'prediction']]
+        lambda_value = 0.0401
+        results = []
+
+        filtered_df = auction_data.copy()
+        if item_class:
+            filtered_df = filtered_df[filtered_df['item_class'] == item_class]
+        if item_subclass:
+            filtered_df = filtered_df[filtered_df['item_subclass'] == item_subclass]
+
+        for index, row in filtered_df.iterrows():
+
+            temp_df = filtered_df.copy()
+            new_buyout_price = row['buyout_in_gold'] + desired_profit
+            temp_df.at[index, 'buyout_in_gold'] = new_buyout_price
+            temp_df = add_features(temp_df)
+            X, _ = transform_data(temp_df)
+
+            if index >= X.shape[0]:
+                print(f"Index {index} out of bounds for transformed data.")
+                continue
+
+            X_item = X[index]
+
+            prediction = model.predict([X_item])
+            probability_of_sale = np.exp(-lambda_value * prediction[0])
+
+            results.append({
+                'item_id': row['item_id'],
+                'new_buyout_price': new_buyout_price,
+                'probability_of_sale': probability_of_sale,
+                'prediction': prediction[0]
+            })
+
+        results = sorted(results, key=lambda x: x['probability_of_sale'], reverse=True)
+        return pd.DataFrame(results)
     else:
+        print("Auction data not available.")
         return pd.DataFrame()
+
 def get_quick_selling_items(budget):
     df = load_and_prepare_data()
     if df is not None:
@@ -116,16 +148,15 @@ with gr.Blocks(title="Auction Tools") as demo:
         gr.Markdown("### Discover resale opportunities")
         realm_id_input3 = gr.Textbox(label="Realm ID", value=str(config["realm_id"]))
         faction_input3 = gr.Radio(["Alliance", "Horde"], label="Faction", value="Alliance")
+        category_input = gr.Dropdown(choices=items_df['item_class'].unique().tolist(), label="Item Class", multiselect=False)
+        subclass_input = gr.Dropdown(choices=items_df['item_subclass'].unique().tolist(), label="Item Subclass", multiselect=False)
         desired_profit_input = gr.Number(label="Desired Profit (Gold)")
         suggest_button = gr.Button("Suggest Items")
         suggested_items_output = gr.DataFrame(label="Suggested Items", interactive=False, height=300)
-        suggest_button.click(lambda realm, faction, profit: get_suggested_items(realm, faction, profit), inputs=[realm_id_input3, faction_input3, desired_profit_input], outputs=suggested_items_output)
+        suggest_button.click(lambda realm, faction, category, subclass, profit: get_suggested_items(realm, faction, profit, category, subclass), inputs=[realm_id_input3, faction_input3, category_input, subclass_input, desired_profit_input], outputs=suggested_items_output)
     with gr.Tab("Quick Selling Items"):
         gr.Markdown("### Suggested items for quick sale")
         budget_input = gr.Number(label="Budget (Gold)")
         show_items_button = gr.Button("Show Items")
         quick_selling_items_output = gr.DataFrame(label="Quick Selling Items", interactive=False, height=300)
         show_items_button.click(lambda budget: get_quick_selling_items(budget), inputs=budget_input, outputs=quick_selling_items_output)
-
-demo.launch(share=True)
-
