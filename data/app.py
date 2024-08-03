@@ -6,14 +6,16 @@ from datetime import datetime
 from utils import get_auction_data
 from transformers import add_features, transform_data
 import numpy as np
-
+import time
+from tqdm import tqdm
 
 config = json.load(open("config.json", "r"))
 model = pickle.load(open('forest_model.pkl', 'rb'))
-items_df = pd.read_csv('data/items.csv')
+items_df = pd.read_csv('items.csv')
 time_left_options = [12, 24, 48]
 
 def load_and_prepare_data(item_data=None):
+    print("Loading and preparing data...")
     try:
         data = get_auction_data()
         df = pd.DataFrame(data, columns=['auction_id', 'item_id', 'bid_in_gold', 'buyout_in_gold', 'quantity', 'time_left', 'rand', 'seed'])
@@ -33,6 +35,9 @@ def load_and_prepare_data(item_data=None):
 
         df = df.merge(items_df, on='item_id', how='inner')
         df = df.drop(columns=['bid', 'buyout', 'max_count', 'sell_price_silver', 'purchase_price_silver'], errors='ignore')
+
+        print("Data loaded and prepared successfully.")
+
         return df
     except Exception as e:
         print(f"Error loading and preparing data: {e}")
@@ -76,6 +81,7 @@ def predict_item_sale(realm_id, faction, item, quantity, buyout, bid, time_left_
 
 def get_suggested_items(realm_id, faction, desired_profit, min_sale_probability, price_filter_min, price_filter_max, item_class=None, item_subclass=None):
     if auction_data is not None:
+        start_time = time.time()
         lambda_value = 0.0401
         resale_percentage = 1.30
         results = []
@@ -88,47 +94,48 @@ def get_suggested_items(realm_id, faction, desired_profit, min_sale_probability,
             filtered_df = filtered_df[filtered_df['item_subclass'].str.lower() == item_subclass.lower()]
         filtered_df = filtered_df[(filtered_df['buyout_in_gold'] >= price_filter_min) & (filtered_df['buyout_in_gold'] <= price_filter_max)]
 
-      
         print("Filtered DataFrame by class, subclass, and price range:")
         print(filtered_df.head())
         print(f"Number of items after filtering: {filtered_df.shape[0]}")
 
         filtered_df = filtered_df.reset_index(drop=True)
 
-        for index, row in filtered_df.iterrows():
-            temp_df = filtered_df.copy()
+        for index, row in tqdm(filtered_df.iterrows(), total=filtered_df.shape[0]):
+            auction_id = row['auction_id']
+            item_id = row['item_id']
+            
+            temp_df = filtered_df[filtered_df['item_id'] == item_id].copy().reset_index(drop=True)
+
+            index = temp_df[temp_df['auction_id'] == auction_id].index[0]
             temp_df.at[index, 'time_left'] = 24
             new_buyout_price = row['buyout_in_gold'] * resale_percentage
             temp_df.at[index, 'buyout_in_gold'] = new_buyout_price
+            temp_df.at[index, 'bid_in_gold'] = new_buyout_price * 0.99
+            temp_df.at[index, 'unit_price'] = new_buyout_price / row['quantity']
 
-            print(f"DataFrame before add_features at index {index}:")
-            print(temp_df.head())
             temp_df = add_features(temp_df)
-            print(f"DataFrame after add_features at index {index}:")
-            print(temp_df.head())
 
             X, _ = transform_data(temp_df)
             if X.shape[0] == 0:
                 print("No data in transformed X.")
                 continue
+
             if index >= X.shape[0]:
                 print(f"Index {index} out of bounds for transformed data.")
                 continue
+
             X_item = X[index]
             prediction = model.predict([X_item])
             probability_of_sale = np.exp(-lambda_value * prediction[0])
 
-
-            print(f"Probability of sale for item_id {row['item_id']} at index {index}: {probability_of_sale}")
             if probability_of_sale < min_sale_probability:
-                print(f"Item excluded due to low probability of sale: {probability_of_sale}")
                 continue
+
             profit = new_buyout_price - row['buyout_in_gold']
-            print(f"Profit for item_id {row['item_id']} at index {index}: {profit}")
 
             if profit < desired_profit:
-                print(f"Item excluded due to low profit: {profit}")
                 continue
+            
             results.append({
                 'item_id': row['item_id'],
                 'item_name': row['item_name'],
@@ -139,12 +146,11 @@ def get_suggested_items(realm_id, faction, desired_profit, min_sale_probability,
                 'prediction': prediction[0]
             })
 
+            pd.DataFrame(temp_df).to_csv('suggested_items.csv', index=False)
 
-        print("Results before sorting:")
-        print(results)
         results = sorted(results, key=lambda x: x['probability_of_sale'], reverse=True)
-        print("Results after sorting:")
-        print(results)
+
+        print(f"Time taken: {time.time() - start_time:.2f} seconds.")
 
         return pd.DataFrame(results)
     else:

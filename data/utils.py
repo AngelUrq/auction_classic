@@ -42,7 +42,7 @@ def process_auction(auction):
 
 
 def get_auction_data():
-    config_path = "C:/Users/jgdui/Documents/Trabajo/auctiondblocal/migrator/config.json"
+    config_path = "config.json"
 
     with open(config_path) as json_data:
         config = json.load(json_data)
@@ -57,8 +57,6 @@ def get_auction_data():
     print(str(len(auctions)) + ' auctions processed.')
     
     return auctions
-
-
 
 def get_item_data():
     config_path = os.path.join(os.path.dirname(__file__), 'config.json')

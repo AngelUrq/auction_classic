@@ -34,15 +34,15 @@ def compute_avg_competitor_price(df):
     df['avg_competitor_price'] = df.groupby(['item_id', 'first_appearance_year', 'first_appearance_month', 'first_appearance_day', 'first_appearance_hour'])['unit_price'].transform('mean')
     df['std_competitor_price'] = df.groupby(['item_id', 'first_appearance_year', 'first_appearance_month', 'first_appearance_day', 'first_appearance_hour'])['unit_price'].transform('std')
 
-    df['avg_competitor_price'].fillna(0, inplace=True)
-    df['std_competitor_price'].fillna(0, inplace=True)
+    #df['avg_competitor_price'].fillna(0, inplace=True)
+    #df['std_competitor_price'].fillna(0, inplace=True)
 
     return df
 
 
 def compute_competitor_count(df):
     df['competitor_count'] = df.groupby(['item_id', 'first_appearance_year', 'first_appearance_month', 'first_appearance_day', 'first_appearance_hour'])['unit_price'].transform('count')
-    df['competitor_count'].fillna(0, inplace=True)
+    #df['competitor_count'].fillna(0, inplace=True)
 
     return df
 
