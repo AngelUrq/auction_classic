@@ -16,17 +16,6 @@ def main():
 
     cursor = db.cursor()
     
-    processed_files_path = "processed_files.txt"
-    
-    if not os.path.exists(processed_files_path):
-        with open(processed_files_path, 'w') as file:
-            file.write("")
-    
-    with open(processed_files_path, 'r') as file:
-        processed_files = file.readlines()
-        
-    processed_files = [x.strip() for x in processed_files]
-
     file_info = {}
 
     for root, dirs, files in os.walk(args.data_dir):
@@ -41,45 +30,42 @@ def main():
     json_files = list(file_info.keys())
 
     for file in json_files:
-        print(file)
+        print(f"Processing file: {file}")
         
-    processed_auctions = {}
-    processed_action_events = {}
-
-    for filepath in tqdm(json_files):
         try:
-            with open(filepath, "r") as file:
-                data = json.load(file)
+            with open(file, "r") as json_file:
+                data = json.load(json_file)
+                print(f"Loaded JSON data from {file}")
         except (FileNotFoundError, json.JSONDecodeError) as e:
-            print(f"Error reading file {filepath}: {e}")
+            print(f"Error reading file {file}: {e}")
+            with open("error_log.txt", "a") as log_file:
+                log_file.write(f"Error reading file {file}: {e}\n")
             continue
 
-        print(f"Processing file: {filepath}")
-        
-        if filepath in processed_files:
-            print(f"File {filepath} has already been processed. Skipping...")
-            continue
-
-        filename = os.path.basename(filepath)
+        filename = os.path.basename(file)
         auction_record = datetime.strptime(filename[:-5], "%Y%m%dT%H")
-
+        print(f"Parsed auction record datetime: {auction_record}")
+        processed_auctions = {}
+        processed_action_events = {}
         auctions_data = []
         action_events_data = []
         
         start_time = time.time()
-        for auction in data["auctions"]:
+        for auction in data.get("auctions", []):
             if processed_auctions.get(auction["id"]) is None:
                 processed_auctions[auction["id"]] = True
                 auctions_data.append((auction["id"], auction["bid"], auction["buyout"], auction["quantity"], auction["item"]["id"]))
+                print(f"Added auction {auction['id']} to auctions_data")
                 
             auction_datetime = auction_record.strftime('%Y-%m-%d %H:%M:%S')
             
             if processed_action_events.get(str(auction["id"]) + auction_datetime) is None:
                 processed_action_events[str(auction["id"]) + auction_datetime] = True
                 action_events_data.append((auction["id"], auction_datetime, auction["time_left"]))
-        end_time = time.time()
+                print(f"Added auction event {auction['id']} at {auction_datetime} to action_events_data")
         
-        print(f"Data processed for file {filepath}. Time taken: {end_time - start_time:.2f} seconds. Number of records: {len(data['auctions'])}")
+        end_time = time.time()
+        print(f"Data processed for file {file}. Time taken: {end_time - start_time:.2f} seconds. Number of records: {len(data['auctions'])}")
 
         try:
             start_time = time.time()
@@ -89,6 +75,7 @@ def main():
                 ON DUPLICATE KEY UPDATE
                     item_id = VALUES(item_id)
             """, auctions_data)
+            print(f"Inserted {len(auctions_data)} records into Auctions")
                         
             cursor.executemany("""
                 INSERT INTO ActionEvents (auction_id, record, time_left)
@@ -96,20 +83,25 @@ def main():
                 ON DUPLICATE KEY UPDATE
                     record = VALUES(record)
             """, action_events_data)
+            print(f"Inserted {len(action_events_data)} records into ActionEvents")
             
             db.commit()
-            
+            print(f"Committed transactions for file {file}")
             end_time = time.time()
-
-            print(f"Auction data for file {filepath} successfully inserted in Auctions. Time taken: {end_time - start_time:.2f} seconds. Number of records: {len(auctions_data)}")
-            print(f"Auction events for file {filepath} successfully inserted in ActionEvents. Time taken: {end_time - start_time:.2f} seconds. Number of records: {len(action_events_data)}")
+            print(f"Auction data for file {file} successfully inserted in Auctions. Time taken: {end_time - start_time:.2f} seconds. Number of records: {len(auctions_data)}")
+            print(f"Auction events for file {file} successfully inserted in ActionEvents. Time taken: {end_time - start_time:.2f} seconds. Number of records: {len(action_events_data)}")
             print("--------------------------------------------------")
             
-            with open(processed_files_path, "a") as file:
-                file.write(filepath + "\n")
         except mysql.connector.Error as err:
             db.rollback()
-            print(f"Error inserting auction data for file {filepath} in Auctions: {err}")
+            print(f"Error inserting auction data for file {file} in Auctions: {err}")
+            with open("error_log.txt", "a") as log_file:
+                log_file.write(f"Error in {file}\n")
+                log_file.write(f"Error: {err}\n")
+                log_file.write("Auctions data:\n")
+                log_file.write(json.dumps(auctions_data, indent=4) + "\n")
+                log_file.write("ActionEvents data:\n")
+                log_file.write(json.dumps(action_events_data, indent=4) + "\n")
 
     cursor.close()
     db.close()
