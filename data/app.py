@@ -4,18 +4,18 @@ import json
 import pickle
 from datetime import datetime
 from utils import get_auction_data
-from auction_preprocessor import AuctionPreprocessor
+from auction_preprocessor import AuctionPreprocessor 
 import numpy as np
 import time
 from tqdm import tqdm
 
 config = json.load(open("config.json", "r"))
 model = pickle.load(open('forest_model.pkl', 'rb'))
+auction_preprocessor = pickle.load(open('auction_preprocessor.pkl', 'rb'))
 items_df = pd.read_csv('items.csv')
-time_left_options = [12, 24, 48]
+time_left_options = [0.5, 2, 12, 48]  
 
 def load_and_prepare_data(item_data=None):
-    print("Loading and preparing data...")
     try:
         data = get_auction_data()
         df = pd.DataFrame(data, columns=['auction_id', 'item_id', 'bid_in_gold', 'buyout_in_gold', 'quantity', 'time_left', 'rand', 'seed'])
@@ -24,6 +24,7 @@ def load_and_prepare_data(item_data=None):
         if item_data:
             item_df = pd.DataFrame([item_data])
             df = pd.concat([df, item_df], ignore_index=True)
+
         current_timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
         df['first_appearance_timestamp'] = current_timestamp
         df['first_appearance_year'] = int(current_timestamp[:4])
@@ -32,12 +33,9 @@ def load_and_prepare_data(item_data=None):
         df['first_appearance_hour'] = int(current_timestamp[11:13])
         df['hours_on_sale'] = 0
         df['unit_price'] = df['buyout_in_gold'] / df['quantity']
-
         df = df.merge(items_df, on='item_id', how='inner')
         df = df.drop(columns=['bid', 'buyout', 'max_count', 'sell_price_silver', 'purchase_price_silver'], errors='ignore')
-
-        print("Data loaded and prepared successfully.")
-
+        df = auction_preprocessor.add_features(df)
         return df
     except Exception as e:
         print(f"Error loading and preparing data: {e}")
@@ -57,10 +55,7 @@ def predict_item_sale(realm_id, faction, item, quantity, buyout, bid, time_left_
     if item_id not in items_df['item_id'].values:
         return "Error: Item not found. Please check the data."
     if time_left_hours not in time_left_options:
-        return "Error: Remaining time must be 12, 24, or 48 hours."
-
-    if time_left_hours == 24:
-        time_left_hours = 48
+        return "Error: Remaining time must be 0.5, 2, 12, or 48 hours."
 
     item_data = {
         'auction_id': 0,
@@ -75,8 +70,6 @@ def predict_item_sale(realm_id, faction, item, quantity, buyout, bid, time_left_
     if df is None:
         return "Error: Could not retrieve auction data."
     
-    auction_preprocessor = pickle.load(open('auction_preprocessor.pkl', 'rb'))
-
     df = auction_preprocessor.add_features(df)
     X, _ = auction_preprocessor.transform(df)
     user_prediction = model.predict(X)[-1]  
@@ -85,11 +78,11 @@ def predict_item_sale(realm_id, faction, item, quantity, buyout, bid, time_left_
     else:
         return f"Your item may take more than {user_prediction:.2f} hours to sell."
 
-def get_suggested_items(realm_id, faction, desired_profit, min_sale_probability, price_filter_max, item_class=None, item_subclass=None):
+def get_suggested_items(realm_id, faction, desired_profit, min_sale_probability, price_filter_min, price_filter_max, item_class=None, item_subclass=None):
     if auction_data is not None:
         start_time = time.time()
         lambda_value = 0.0401
-        resale_percentage = 2.0
+        resale_percentage = 1.30
         results = []
 
         filtered_df = auction_data.copy()
@@ -98,13 +91,8 @@ def get_suggested_items(realm_id, faction, desired_profit, min_sale_probability,
             filtered_df = filtered_df[filtered_df['item_class'].str.lower() == item_class.lower()]
         if item_subclass:
             filtered_df = filtered_df[filtered_df['item_subclass'].str.lower() == item_subclass.lower()]
-        filtered_df = filtered_df[(filtered_df['buyout_in_gold'] <= price_filter_max)]
-
-        print("Filtered DataFrame by class, subclass, and price range:")
-        print(filtered_df.head())
-        print(f"Number of items after filtering: {filtered_df.shape[0]}")
-
-        auction_preprocessor = pickle.load(open('auction_preprocessor.pkl', 'rb'))
+            
+        filtered_df = filtered_df[(filtered_df['buyout_in_gold'] >= price_filter_min) & (filtered_df['buyout_in_gold'] <= price_filter_max)]
 
         filtered_df = filtered_df.reset_index(drop=True)
 
@@ -115,7 +103,7 @@ def get_suggested_items(realm_id, faction, desired_profit, min_sale_probability,
             temp_df = filtered_df[filtered_df['item_id'] == item_id].copy().reset_index(drop=True)
 
             index = temp_df[temp_df['auction_id'] == auction_id].index[0]
-            temp_df.at[index, 'time_left'] = 48
+            temp_df.at[index, 'time_left'] = 24
             new_buyout_price = row['buyout_in_gold'] * resale_percentage
             temp_df.at[index, 'buyout_in_gold'] = new_buyout_price
             temp_df.at[index, 'bid_in_gold'] = new_buyout_price * 0.99
@@ -125,14 +113,12 @@ def get_suggested_items(realm_id, faction, desired_profit, min_sale_probability,
 
             X, _ = auction_preprocessor.transform(temp_df)
             if X.shape[0] == 0:
-                print("No data in transformed X.")
                 continue
 
             if index >= X.shape[0]:
-                print(f"Index {index} out of bounds for transformed data.")
                 continue
 
-            X_item = X[index]
+            X_item = X.iloc[index]
             prediction = model.predict([X_item])
             probability_of_sale = np.exp(-lambda_value * prediction[0])
 
@@ -154,34 +140,22 @@ def get_suggested_items(realm_id, faction, desired_profit, min_sale_probability,
                 'prediction': prediction[0]
             })
 
-            pd.DataFrame(temp_df).to_csv('suggested_items.csv', index=False)
-
         results = sorted(results, key=lambda x: x['probability_of_sale'], reverse=True)
-
-        print(f"Time taken: {time.time() - start_time:.2f} seconds.")
-        print(f"Number of suggested items: {len(results)}")
 
         return pd.DataFrame(results)
     else:
-        print("Auction data not available.")
         return pd.DataFrame()
 
 def get_quick_selling_items(budget):
     df = load_and_prepare_data()
-    auction_preprocessor = pickle.load(open('auction_preprocessor.pkl', 'rb'))
-
     if df is not None:
         df = auction_preprocessor.add_features(df)
         X, _ = auction_preprocessor.transform(df)
-
         df['prediction'] = model.predict(X)
 
         quick_selling_items = df[(df['prediction'] < 8) & (df['buyout_in_gold'] <= budget)]
-        print("Quick Selling Items DataFrame:")
-        print(quick_selling_items.head()) 
         return quick_selling_items[['item_id', 'item_name', 'quantity', 'buyout_in_gold', 'bid_in_gold', 'time_left', 'prediction']]
     else:
-        print("Error: Could not load auction data.")
         return pd.DataFrame()
 
 with gr.Blocks(title="Auction Tools") as demo:
@@ -207,7 +181,7 @@ with gr.Blocks(title="Auction Tools") as demo:
         auction_data_button = gr.Button("Get Data")
         auction_data_output = gr.DataFrame(label="Auction Data", interactive=False, height=300)
         auction_data_button.click(lambda realm, faction: auction_data, inputs=[realm_id_input2, faction_input2], outputs=auction_data_output)
-    
+
     with gr.Tab("Resale Suggestions"):
         gr.Markdown("### Discover resale opportunities")
         realm_id_input3 = gr.Textbox(label="Realm ID", value=str(config["realm_id"]))
@@ -216,11 +190,12 @@ with gr.Blocks(title="Auction Tools") as demo:
         subclass_input = gr.Dropdown(choices=items_df['item_subclass'].unique().tolist(), label="Item Subclass", multiselect=False)
         desired_profit_input = gr.Number(label="Desired Profit (Gold)")
         sale_probability_input = gr.Slider(label="Minimum Sale Probability (%)", minimum=0, maximum=100, step=1, value=80)
-        price_filter_max_input = gr.Number(label="Maximum Original Buyout Price (Gold)", value=500)
+        price_filter_min_input = gr.Number(label="Minimum Original Buyout Price (Gold)", value=0)
+        price_filter_max_input = gr.Number(label="Maximum Original Buyout Price (Gold)", value=10000)
         suggest_button = gr.Button("Suggest Items")
         suggested_items_output = gr.DataFrame(label="Suggested Items", interactive=False, height=300)
-        suggest_button.click(lambda realm, faction, category, subclass, profit, prob, max_price: get_suggested_items(realm, faction, profit, prob / 100, max_price, category, subclass), inputs=[realm_id_input3, faction_input3, category_input, subclass_input, desired_profit_input, sale_probability_input, price_filter_max_input], outputs=suggested_items_output)
-    
+        suggest_button.click(lambda realm, faction, category, subclass, profit, prob, min_price, max_price: get_suggested_items(realm, faction, profit, prob / 100, min_price, max_price, category, subclass), inputs=[realm_id_input3, faction_input3, category_input, subclass_input, desired_profit_input, sale_probability_input, price_filter_min_input, price_filter_max_input], outputs=suggested_items_output)
+
     with gr.Tab("Quick Selling Items"):
         gr.Markdown("### Suggested items for quick sale")
         budget_input = gr.Number(label="Budget (Gold)")
