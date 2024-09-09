@@ -4,7 +4,13 @@ SELECT
     a.buyout / 10000.0 AS buyout_in_gold,
     (a.buyout / 10000.0) / a.quantity AS unit_price,
     a.quantity,
-    a.time_left,
+    MAX(CASE
+        WHEN ae.time_left = 'VERY_LONG' THEN 48
+        WHEN ae.time_left = 'LONG' THEN 12
+        WHEN ae.time_left = 'MEDIUM' THEN 2
+        WHEN ae.time_left = 'SHORT' THEN 0.5
+        ELSE NULL
+    END) AS time_left,
     a.item_id,
     i.item_name,
     i.quality,
@@ -24,7 +30,24 @@ SELECT
 FROM Auctions a
 JOIN ActionEvents ae ON a.auction_id = ae.auction_id
 JOIN Items i on i.item_id = a.item_id
-GROUP BY a.auction_id
+GROUP BY 
+    a.auction_id,
+    a.bid,
+    a.buyout,
+    a.quantity,
+    a.item_id,
+    i.item_name,
+    i.quality,
+    i.item_class,
+    i.item_subclass,
+    i.is_stackable,
+    i.purchase_price_gold,
+    i.required_level,
+    i.item_level,
+    i.sell_price_gold
 HAVING DATE(first_appearance_timestamp) NOT IN (
-    '2024-03-1', 
-    '2024-03-2')
+    '2024-08-11',
+    '2024-08-12',
+    '2024-07-23',
+    '2024-07-24'
+);
