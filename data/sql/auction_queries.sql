@@ -1,8 +1,8 @@
 SELECT
     a.auction_id,
-    a.bid / 10000.0 AS bid_in_gold,
-    a.buyout / 10000.0 AS buyout_in_gold,
-    (a.buyout / 10000.0) / a.quantity AS unit_price,
+    a.bid AS bid,
+    a.buyout AS buyout,
+    a.buyout / a.quantity AS unit_price,
     a.quantity,
     MAX(CASE
         WHEN ae.time_left = 'VERY_LONG' THEN 48

@@ -1,7 +1,7 @@
 import os, json, torch, time
 from datetime import datetime
 
-BASE_DIR = "/home/cmiranda/Documents/auctions"
+BASE_DIR = "/home/angel/source/python/auction_classic/data/auctions"
 TIME_LEFT_MAPPING = {'VERY_LONG': 48, 'LONG': 12, 'MEDIUM': 2, 'SHORT': 0.5}
 auction_appearances = {}
 
@@ -9,6 +9,7 @@ def process_json_file(file_path, file_timestamp):
     try:
         with open(file_path, 'r') as f:
             auctions = json.load(f).get('auctions', [])
+            
         return {auction['item']['id']: [
             auction['bid'], auction['buyout'], auction['quantity'], auction['item']['id'],
             TIME_LEFT_MAPPING.get(auction['time_left'], 0),
@@ -33,6 +34,7 @@ def prepare_data(base_dir):
         os.makedirs(output_folder, exist_ok=True)
         
         for file_name in os.listdir(date_folder_path):
+            print(file_name)
             if not file_name.endswith('.json'):
                 continue
             
@@ -41,11 +43,11 @@ def prepare_data(base_dir):
             file_timestamp = datetime.strptime(f"{file_name.split('T')[0]}T{file_name.split('T')[1].split('.')[0]}", "%Y%m%dT%H")
             file_start_time = time.time()
             auctions_by_item = process_json_file(file_path, file_timestamp)
-            print(f"Processed {file_name} in {time.time() - file_start_time:.2f} seconds")
             
             if auctions_by_item:
                 processed_count += 1
-                torch.save(auctions_by_item, os.path.join(output_folder, f"{file_name.split('T')[1].split('.')[0]}.pt"))
+                with open(os.path.join(output_folder, f"{file_name.split('T')[1].split('.')[0]}.json"), 'w') as json_file:
+                    json.dump(auctions_by_item, json_file)
         
         print(f"Processed folder: {date_folder}")
     

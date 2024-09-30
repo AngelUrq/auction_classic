@@ -29,13 +29,12 @@ def main():
 
     json_files = list(file_info.keys())
 
-    for file in json_files:
+    for file in tqdm(json_files):
         print(f"Processing file: {file}")
         
         try:
             with open(file, "r") as json_file:
                 data = json.load(json_file)
-                print(f"Loaded JSON data from {file}")
         except (FileNotFoundError, json.JSONDecodeError) as e:
             print(f"Error reading file {file}: {e}")
             with open("error_log.txt", "a") as log_file:
@@ -54,15 +53,13 @@ def main():
         for auction in data.get("auctions", []):
             if processed_auctions.get(auction["id"]) is None:
                 processed_auctions[auction["id"]] = True
-                auctions_data.append((auction["id"], auction["bid"], auction["buyout"], auction["quantity"], auction["item"]["id"]))
-                print(f"Added auction {auction['id']} to auctions_data")
+                auctions_data.append((auction["id"], auction["bid"] / 10000.0, auction["buyout"] / 10000.0, auction["quantity"], auction["item"]["id"]))
                 
             auction_datetime = auction_record.strftime('%Y-%m-%d %H:%M:%S')
             
             if processed_action_events.get(str(auction["id"]) + auction_datetime) is None:
                 processed_action_events[str(auction["id"]) + auction_datetime] = True
                 action_events_data.append((auction["id"], auction_datetime, auction["time_left"]))
-                print(f"Added auction event {auction['id']} at {auction_datetime} to action_events_data")
         
         end_time = time.time()
         print(f"Data processed for file {file}. Time taken: {end_time - start_time:.2f} seconds. Number of records: {len(data['auctions'])}")
@@ -86,7 +83,6 @@ def main():
             print(f"Inserted {len(action_events_data)} records into ActionEvents")
             
             db.commit()
-            print(f"Committed transactions for file {file}")
             end_time = time.time()
             print(f"Auction data for file {file} successfully inserted in Auctions. Time taken: {end_time - start_time:.2f} seconds. Number of records: {len(auctions_data)}")
             print(f"Auction events for file {file} successfully inserted in ActionEvents. Time taken: {end_time - start_time:.2f} seconds. Number of records: {len(action_events_data)}")

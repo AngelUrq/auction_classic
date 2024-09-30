@@ -18,8 +18,8 @@ CREATE TABLE Items (
 -- Create the Auctions table
 CREATE TABLE Auctions (
   auction_id INT PRIMARY KEY,
-  bid INT,
-  buyout INT,
+  bid FLOAT,
+  buyout FLOAT,
   quantity INT,
   item_id INT
 );
