@@ -1,11 +1,18 @@
 import os, json, torch, time
+import argparse
+import csv
 from datetime import datetime
 from tqdm import tqdm
 
-data_dir = "data/auctions"
-time_left_mapping = {'VERY_LONG': 48, 'LONG': 12, 'MEDIUM': 2, 'SHORT': 0.5}
-auction_appearances = {}
+time_left_to_int = {
+    'VERY_LONG': 48,
+    'LONG': 12,
+    'MEDIUM': 2,
+    'SHORT': 0.5
+}
 exclude_first_times = [
+    '02-01-2024',
+    '03-01-2024',
     '28-01-2024',
     '29-01-2024',
     '30-01-2024',
@@ -28,110 +35,92 @@ exclude_first_times = [
     '25-09-2024',
 ]
 
-def load_auctions(data_dir):
+def process_auctions(args):
     file_info = {}
-    auction_appearances = {}
+    data_dir = args.data_dir
+
+    with open(args.timestamps, 'r') as f:
+        timestamps = json.load(f)
 
     for root, dirs, files in os.walk(data_dir):
-        for filename in tqdm(files):
+        for filename in files:
             filepath = os.path.join(root, filename)
             date = datetime.strptime(filename.split('.')[0], '%Y%m%dT%H')
             file_info[filepath] = date
 
     file_info = {k: v for k, v in sorted(file_info.items(), key=lambda item: item[1])}
 
-    print(file_info)
-    
+    if not os.path.exists(os.path.join(args.output_dir, 'sequences')):
+        os.makedirs(os.path.join(args.output_dir, 'sequences'))
+
+    auction_indices = []
+
     for filepath in tqdm(list(file_info.keys())):
         with open(filepath, 'r') as f:
             try:
                 json_data = json.load(f)
-                
-                if 'auctions' not in json_data:
-                    print(f"File {filepath} does not contain 'auctions' key, skipping.")
-                    continue
-                
-                auctions = json_data['auctions']
-                timestamp = file_info[filepath]
-
-                for auction in auctions:
-                    auction_id = auction['id']
-                    auction['timestamp'] = timestamp.strftime("%Y-%m-%d %H:%M:%S")
-                    
-                    if auction_id not in auction_appearances:
-                        auction_appearances[auction_id] = {
-                            'first_datetime': timestamp, 
-                            'last_datetime': timestamp
-                        }
-                    else:
-                        auction_appearances[auction_id]['last_datetime'] = timestamp
-                
             except json.JSONDecodeError as e:
                 print(f"Error loading file {filepath}: {e}")
                 continue
             except Exception as e:
                 print(f"Unexpected error loading file {filepath}: {e}")
                 continue
+                
+        auctions = json_data['auctions']
+        prediction_time = file_info[filepath]
+        auctions_by_item = {}
 
-    return total_auctions
-
-def process_auction_data(total_auctions):
-    auctions_by_item = {}
-    hours_on_sale = {}
-    auction_ids_by_item = {}
-    hours_since_first_appearance_values = [] 
-
-    for auction in total_auctions:
-
-        if not isinstance(auction, dict) or 'item' not in auction or 'id' not in auction['item']:
-            print(f"Unexpected structure in auction: {auction}")
+        if prediction_time.strftime('%d-%m-%Y') in exclude_first_times:
             continue
 
-        auction_id = auction['id']
-        item_id = auction['item']['id']
-        time_left_numeric = time_left_mapping.get(auction['time_left'], 0)
-        bid = auction['bid'] * 10000 / 1000
-        buyout = auction['buyout'] * 10000 / 1000
-        quantity = auction['quantity'] / 200
-        time_left = time_left_numeric / 48
-        item_index = item_to_index.get(item_id, 1)
-        timestamp = datetime.strptime(auction['timestamp'], "%Y-%m-%d %H:%M:%S")
+        for auction in auctions:
+            auction_id = str(auction['id'])
+            item_id = auction['item']['id']
+            bid = auction['bid'] / 10000.0
+            buyout = auction['buyout'] / 10000.0
+            time_left = auction['time_left']
+            quantity = auction['quantity']
 
-        if timestamp != prediction_time:
-            continue
+            first_appearance = datetime.strptime(timestamps[auction_id]['first_appearance'], '%Y-%m-%d %H:%M:%S')
+            last_appearance = datetime.strptime(timestamps[auction_id]['last_appearance'], '%Y-%m-%d %H:%M:%S')
 
-        hours_since_first_appearance = (prediction_time - auction_appearances[auction_id]['first']).total_seconds() / 3600
-        hours_since_first_appearance_values.append(hours_since_first_appearance)  
-        hours_since_first_appearance_normalized = hours_since_first_appearance / 48.0
-        hours_on_sale[auction_id] = (auction_appearances[auction_id]['last'] - auction_appearances[auction_id]['first']).total_seconds() / 3600
+            hours_since_first_appearance = (prediction_time - first_appearance).total_seconds() / 3600
+            hours_on_sale = (last_appearance - first_appearance).total_seconds() / 3600
 
-        datetime_str = prediction_time.strftime("%Y-%m-%d %H:%M:%S")
-        if (item_id, datetime_str) in weekly_historical_prices.index:
-            historical_price = weekly_historical_prices.loc[(item_id, datetime_str), 'price']
-        else:
-            historical_price = buyout
+            processed_auction = [
+                bid, 
+                buyout,  
+                quantity, 
+                item_id,
+                time_left_to_int.get(time_left, 0),
+                hours_since_first_appearance,  
+                hours_on_sale
+            ]
+            
+            if item_id not in auctions_by_item:
+                auctions_by_item[item_id] = []
+                auction_indices.append((prediction_time.strftime('%Y-%m-%d %H:%M:%S'), item_id))
 
-        processed_auction = [
-            bid, 
-            buyout,  
-            quantity, 
-            item_index,
-            time_left, 
-            hours_since_first_appearance_normalized,  
-            historical_price  
-        ]
-        
-        if item_index not in auctions_by_item:
-            auctions_by_item[item_index] = []
-            auction_ids_by_item[item_index] = []
+            auctions_by_item[item_id].append(processed_auction)
 
-        auctions_by_item[item_index].append(processed_auction)
-        auction_ids_by_item[item_index].append(auction_id)
+        if not os.path.exists(os.path.join(args.output_dir, 'sequences', prediction_time.strftime('%Y-%m-%d'))):
+            os.makedirs(os.path.join(args.output_dir, 'sequences', prediction_time.strftime('%Y-%m-%d')))
 
+        output_filepath = os.path.join(args.output_dir, 'sequences', prediction_time.strftime('%Y-%m-%d'), prediction_time.strftime('%H') + '.pt')
+        torch.save(auctions_by_item, output_filepath)
 
-    return auctions_by_item, auction_ids_by_item, hours_on_sale
+    with open(os.path.join(args.output_dir, 'auction_indices.csv'), 'w') as f:
+        writer = csv.writer(f)
+        writer.writerow(['record', 'item_id'])
+        writer.writerows(auction_indices)
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description='Check JSON files in auctions folder')
+    parser.add_argument('--data_dir', type=str, required=True, help='Path to the auctions folder')
+    parser.add_argument('--timestamps', type=str, required=True, help='Path to the timestamps JSON file')
+    parser.add_argument('--output_dir', type=str, required=True, help='Path to the output folder')
+    args = parser.parse_args()
+
     start_time = time.time()
-    load_auctions()
+    process_auctions(args)
     print(f"Execution time: {time.time() - start_time:.2f} seconds")

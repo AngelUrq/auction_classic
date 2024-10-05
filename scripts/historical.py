@@ -2,11 +2,9 @@ import os
 import json
 import pandas as pd
 import numpy as np
+import argparse
 from datetime import datetime
 from tqdm import tqdm
-
-data_dir = 'rl/data/auctions/'  
-output_path = 'data/historical_prices.csv'  
 
 def process_json_file(filepath):
     records = []
@@ -40,27 +38,21 @@ def process_json_file(filepath):
 def winsorized_mean(data, limits):
     lower, upper = limits
     
-    # Sort the data
     sorted_data = data.sort_values()
     
-    # Calculate the cutoff points
     lower_cutoff = np.percentile(sorted_data, lower)
     upper_cutoff = np.percentile(sorted_data, upper)
     
-    # Winsorize the data
     winsorized_data = np.clip(sorted_data, lower_cutoff, upper_cutoff)
 
-    # Calculate the mean of the winsorized data
     return winsorized_data.mean()
 
 def compute_average_prices(records):
     limits = (1, 75)  # Winsorize 10% from each end
-    # if we have less than 5 records, return median
 
     if len(records) <= 5 and len(records) > 1:
         return np.median(records)
     
-    # if we have 5 or more records, return the winsorized mean
     return winsorized_mean(records, limits)
 
 def calculate_and_save_average_prices(records, output_path, mode='a'):
@@ -84,22 +76,26 @@ def calculate_and_save_average_prices(records, output_path, mode='a'):
     header = True if mode == 'w' else False
     average_prices.to_csv(output_path, index=False, mode=mode, header=header)
 
-def main():
+def main(args):
     all_file_paths = []
     
-    for root, dirs, files in os.walk(data_dir):
+    for root, dirs, files in os.walk(args.data_dir):
         for filename in files:
             if filename.endswith('.json'):
                 filepath = os.path.join(root, filename)
                 all_file_paths.append(filepath)
     
-    if os.path.exists(output_path):
-        os.remove(output_path)
+    if not os.path.exists(args.output_dir):
+        os.makedirs(args.output_dir)
     
     for i, filepath in enumerate(tqdm(all_file_paths)):
         records = process_json_file(filepath)
         if records:
-            calculate_and_save_average_prices(records, output_path, mode='a' if i > 0 else 'w')
+            calculate_and_save_average_prices(records, os.path.join(args.output_dir, 'hourly_historical_prices.csv'), mode='a' if i > 0 else 'w')
 
 if __name__ == "__main__":
-    main()
+    parser = argparse.ArgumentParser(description='Process auction data and calculate average prices.')
+    parser.add_argument('--data_dir', type=str, help='Directory containing auction data.')
+    parser.add_argument('--output_dir', type=str, help='Path to save the output CSV file.')
+
+    main(parser.parse_args())
