@@ -3,6 +3,7 @@ import json
 import pandas as pd
 import numpy as np
 import argparse
+
 from datetime import datetime
 from tqdm import tqdm
 
@@ -92,6 +93,8 @@ def main(args):
         records = process_json_file(filepath)
         if records:
             calculate_and_save_average_prices(records, os.path.join(args.output_dir, 'hourly_historical_prices.csv'), mode='a' if i > 0 else 'w')
+        
+        break
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Process auction data and calculate average prices.')
