@@ -1,6 +1,7 @@
 import os, json, torch, time
 import argparse
 import csv
+import numpy as np
 from datetime import datetime
 from tqdm import tqdm
 
@@ -53,7 +54,12 @@ def process_auctions(args):
     if not os.path.exists(os.path.join(args.output_dir, 'sequences')):
         os.makedirs(os.path.join(args.output_dir, 'sequences'))
 
-    auction_indices = []
+    if not os.path.exists(os.path.join(args.output_dir, 'auction_indices.csv')):
+        print('Creating auction_indices.csv')
+
+        with open(os.path.join(args.output_dir, 'auction_indices.csv'), 'w', newline='') as csvfile:
+            writer = csv.writer(csvfile)
+            writer.writerow(['record', 'item_id', 'group_len', 'group_mean', 'group_std', 'group_min', 'group_max', 'expansion'])
 
     for filepath in tqdm(list(file_info.keys())):
         with open(filepath, 'r') as f:
@@ -68,7 +74,13 @@ def process_auctions(args):
                 
         auctions = json_data['auctions']
         prediction_time = file_info[filepath]
+        output_filepath = os.path.join(args.output_dir, 'sequences', prediction_time.strftime('%Y-%m-%d'), prediction_time.strftime('%H') + '.pt')
         auctions_by_item = {}
+        auction_indices = []
+
+        if os.path.exists(output_filepath):
+            print(f'File {output_filepath} already exists, skipping')
+            continue
 
         if prediction_time.strftime('%d-%m-%Y') in exclude_first_times:
             continue
@@ -99,20 +111,30 @@ def process_auctions(args):
             
             if item_id not in auctions_by_item:
                 auctions_by_item[item_id] = []
-                auction_indices.append((prediction_time.strftime('%Y-%m-%d %H:%M:%S'), item_id))
 
             auctions_by_item[item_id].append(processed_auction)
 
         if not os.path.exists(os.path.join(args.output_dir, 'sequences', prediction_time.strftime('%Y-%m-%d'))):
             os.makedirs(os.path.join(args.output_dir, 'sequences', prediction_time.strftime('%Y-%m-%d')))
 
-        output_filepath = os.path.join(args.output_dir, 'sequences', prediction_time.strftime('%Y-%m-%d'), prediction_time.strftime('%H') + '.pt')
-        torch.save(auctions_by_item, output_filepath)
+        for item_id, auctions in auctions_by_item.items():
+            item_hours_on_sale = np.array([auction[6] for auction in auctions])
 
-    with open(os.path.join(args.output_dir, 'auction_indices.csv'), 'w') as f:
-        writer = csv.writer(f)
-        writer.writerow(['record', 'item_id'])
-        writer.writerows(auction_indices)
+            group_mean = round(np.mean(item_hours_on_sale), 2)
+            group_std = round(np.std(item_hours_on_sale), 2)
+            group_min = round(np.min(item_hours_on_sale), 2)
+            group_max = round(np.max(item_hours_on_sale), 2)
+            group_len = len(item_hours_on_sale)
+
+            expansion = 'cata' if prediction_time > datetime(2024, 6, 1) else 'wotlk'
+
+            auction_indices.append((prediction_time.strftime('%Y-%m-%d %H:%M:%S'), item_id, group_len, group_mean, group_std, group_min, group_max, expansion))
+
+        with open(os.path.join(args.output_dir, 'auction_indices.csv'), 'a', newline='') as f:
+            writer = csv.writer(f)
+            writer.writerows(auction_indices)
+
+        torch.save(auctions_by_item, output_filepath)
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Check JSON files in auctions folder')
