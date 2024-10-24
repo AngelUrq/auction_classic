@@ -13,19 +13,6 @@ def create_access_token(client_id, client_secret, region='us'):
     return response.json()
 
 
-def retrieve_from_api(config):
-    response = create_access_token(config['client_key'], config['secret_key'])
-    token = response['access_token']
-    print('Token created')
-
-    response = requests.get('https://us.api.blizzard.com/data/wow/connected-realm/{}/auctions/{}?namespace=dynamic-classic-us&locale=en_US&access_token={}'.format(
-        config['realm_id'], config['auction_house_id'], token))
-
-    print('Request done')
-
-    return response.json()
-
-
 def process_auction(auction):
     rand = None
     if 'rand' in auction['item'].keys():
@@ -35,19 +22,23 @@ def process_auction(auction):
     if 'seed' in auction['item'].keys():
         seed = str(auction['item']['seed'])
     
-    bid_gold = auction['bid'] / 10000
-    buyout_gold = auction['buyout'] / 10000
+    bid_gold = auction['bid'] / 10000.0
+    buyout_gold = auction['buyout'] / 10000.0
 
     return (auction['id'], auction['item']['id'], bid_gold, buyout_gold, auction['quantity'], auction['time_left'], rand, seed)
 
 
-def get_auction_data():
-    config_path = "config.json"
+def get_current_auctions(config):
+    response = create_access_token(config['client_key'], config['secret_key'])
+    token = response['access_token']
+    print('Token created')
 
-    with open(config_path) as json_data:
-        config = json.load(json_data)
+    response = requests.get('https://us.api.blizzard.com/data/wow/connected-realm/{}/auctions/{}?namespace=dynamic-classic-us&locale=en_US&access_token={}'.format(
+        config['realm_id'], config['auction_house_id'], token))
 
-    data = retrieve_from_api(config)
+    print('Request done')
+
+    data = response.json()
 
     auctions = []
 
@@ -57,6 +48,7 @@ def get_auction_data():
     print(str(len(auctions)) + ' auctions processed.')
     
     return auctions
+
 
 def get_item_data():
     config_path = os.path.join(os.path.dirname(__file__), 'config.json')
