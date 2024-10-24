@@ -1,0 +1,6 @@
+wandb
+pandas
+matplotlib
+tqdm
+scikit-learn
+torch_tb_profiler

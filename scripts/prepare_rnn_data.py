@@ -2,6 +2,7 @@ import os, json, torch, time
 import argparse
 import csv
 import numpy as np
+import h5py
 from datetime import datetime
 from tqdm import tqdm
 
@@ -11,6 +12,7 @@ time_left_to_int = {
     'MEDIUM': 2,
     'SHORT': 0.5
 }
+
 exclude_first_times = [
     '02-01-2024',
     '03-01-2024',
@@ -35,10 +37,10 @@ exclude_first_times = [
     '24-09-2024',
     '25-09-2024',
 ]
-
 def process_auctions(args):
     file_info = {}
     data_dir = args.data_dir
+    h5_filename = 'sequences.h5'
 
     with open(args.timestamps, 'r') as f:
         timestamps = json.load(f)
@@ -51,15 +53,18 @@ def process_auctions(args):
 
     file_info = {k: v for k, v in sorted(file_info.items(), key=lambda item: item[1])}
 
-    if not os.path.exists(os.path.join(args.output_dir, 'sequences')):
-        os.makedirs(os.path.join(args.output_dir, 'sequences'))
-
     if not os.path.exists(os.path.join(args.output_dir, 'auction_indices.csv')):
         print('Creating auction_indices.csv')
 
         with open(os.path.join(args.output_dir, 'auction_indices.csv'), 'w', newline='') as csvfile:
             writer = csv.writer(csvfile)
             writer.writerow(['record', 'item_id', 'group_len', 'group_mean', 'group_std', 'group_min', 'group_max', 'expansion'])
+
+    if not os.path.exists(os.path.join(args.output_dir, h5_filename)):
+        print(f'Creating {h5_filename}')
+
+        with h5py.File(os.path.join(args.output_dir, h5_filename), 'w') as f:
+            pass
 
     for filepath in tqdm(list(file_info.keys())):
         with open(filepath, 'r') as f:
@@ -74,13 +79,8 @@ def process_auctions(args):
                 
         auctions = json_data['auctions']
         prediction_time = file_info[filepath]
-        output_filepath = os.path.join(args.output_dir, 'sequences', prediction_time.strftime('%Y-%m-%d'), prediction_time.strftime('%H') + '.pt')
         auctions_by_item = {}
         auction_indices = []
-
-        if os.path.exists(output_filepath):
-            print(f'File {output_filepath} already exists, skipping')
-            continue
 
         if prediction_time.strftime('%d-%m-%Y') in exclude_first_times:
             continue
@@ -97,15 +97,15 @@ def process_auctions(args):
             last_appearance = datetime.strptime(timestamps[auction_id]['last_appearance'], '%Y-%m-%d %H:%M:%S')
 
             hours_since_first_appearance = (prediction_time - first_appearance).total_seconds() / 3600
-            hours_on_sale = (last_appearance - first_appearance).total_seconds() / 3600
+            hours_on_sale = (last_appearance - prediction_time).total_seconds() / 3600
 
             processed_auction = [
-                bid, 
-                buyout,  
-                quantity, 
+                bid,
+                buyout,
+                quantity,
                 item_id,
                 time_left_to_int.get(time_left, 0),
-                hours_since_first_appearance,  
+                hours_since_first_appearance,
                 hours_on_sale
             ]
             
@@ -114,33 +114,41 @@ def process_auctions(args):
 
             auctions_by_item[item_id].append(processed_auction)
 
-        if not os.path.exists(os.path.join(args.output_dir, 'sequences', prediction_time.strftime('%Y-%m-%d'))):
-            os.makedirs(os.path.join(args.output_dir, 'sequences', prediction_time.strftime('%Y-%m-%d')))
+        with h5py.File(os.path.join(args.output_dir, h5_filename), 'a') as h5_file:
+            group_path = f"{prediction_time.strftime('%Y-%m-%d')}/{prediction_time.strftime('%H')}"
+            if group_path not in h5_file:
+                h5_file.create_group(group_path)
+                
+            for item_id, auctions in auctions_by_item.items():
+                item_hours_on_sale = np.array([auction[6] for auction in auctions])
 
-        for item_id, auctions in auctions_by_item.items():
-            item_hours_on_sale = np.array([auction[6] for auction in auctions])
+                group_mean = round(np.mean(item_hours_on_sale), 2)
+                group_std = round(np.std(item_hours_on_sale), 2)
+                group_min = round(np.min(item_hours_on_sale), 2)
+                group_max = round(np.max(item_hours_on_sale), 2)
+                group_len = len(item_hours_on_sale)
 
-            group_mean = round(np.mean(item_hours_on_sale), 2)
-            group_std = round(np.std(item_hours_on_sale), 2)
-            group_min = round(np.min(item_hours_on_sale), 2)
-            group_max = round(np.max(item_hours_on_sale), 2)
-            group_len = len(item_hours_on_sale)
+                expansion = 'cata' if prediction_time > datetime(2024, 6, 1) else 'wotlk'
 
-            expansion = 'cata' if prediction_time > datetime(2024, 6, 1) else 'wotlk'
+                auction_indices.append((prediction_time.strftime('%Y-%m-%d %H:%M:%S'), item_id, group_len, group_mean, group_std, group_min, group_max, expansion))
+                                
+                dataset_name = f'{item_id}'
+                if dataset_name in h5_file[group_path]:
+                    print(f"Dataset {dataset_name} already exists in group {group_path}. Skipping.")
+                    continue
 
-            auction_indices.append((prediction_time.strftime('%Y-%m-%d %H:%M:%S'), item_id, group_len, group_mean, group_std, group_min, group_max, expansion))
+                h5_file[group_path].create_dataset(dataset_name, data=np.array(auctions))
 
         with open(os.path.join(args.output_dir, 'auction_indices.csv'), 'a', newline='') as f:
             writer = csv.writer(f)
             writer.writerows(auction_indices)
-
-        torch.save(auctions_by_item, output_filepath)
+            
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Check JSON files in auctions folder')
-    parser.add_argument('--data_dir', type=str, required=True, help='Path to the auctions folder')
-    parser.add_argument('--timestamps', type=str, required=True, help='Path to the timestamps JSON file')
-    parser.add_argument('--output_dir', type=str, required=True, help='Path to the output folder')
+    parser.add_argument('--data_dir', type=str, help='Path to the auctions folder', default=os.path.abspath('data/auctions/'))
+    parser.add_argument('--timestamps', type=str, help='Path to the timestamps JSON file', default=os.path.abspath('generated/timestamps.json'))
+    parser.add_argument('--output_dir', type=str, help='Path to the output folder', default=os.path.abspath('generated/'))
     args = parser.parse_args()
 
     start_time = time.time()
