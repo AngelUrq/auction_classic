@@ -9,8 +9,7 @@ import time
 from tqdm import tqdm
 
 config = json.load(open("config.json", "r"))
-model = pickle.load(open('forest_model.pkl', 'rb'))
-items_df = pd.read_csv('items.csv')
+items_df = pd.read_csv('../data/items.csv')
 time_left_options = [12, 24, 48]
 
 def load_and_prepare_data(item_data=None):
@@ -23,6 +22,7 @@ def load_and_prepare_data(item_data=None):
         if item_data:
             item_df = pd.DataFrame([item_data])
             df = pd.concat([df, item_df], ignore_index=True)
+
         current_timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
         df['first_appearance_timestamp'] = current_timestamp
         df['first_appearance_year'] = int(current_timestamp[:4])
@@ -74,8 +74,6 @@ def predict_item_sale(realm_id, faction, item, quantity, buyout, bid, time_left_
     if df is None:
         return "Error: Could not retrieve auction data."
     
-    auction_preprocessor = pickle.load(open('auction_preprocessor.pkl', 'rb'))
-
     df = auction_preprocessor.add_features(df)
     X, _ = auction_preprocessor.transform(df)
     user_prediction = model.predict(X)[-1]  
