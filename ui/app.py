@@ -136,6 +136,62 @@ def compute_auctions_appearances(data_dir):
 
 auction_appearances = compute_auctions_appearances(os.path.join(base_path, "ui", "sample"))
 
+def predict_item_sale(realm_id, faction, item_id, quantity, buyout, bid, time_left):
+    item_id = int(item_id)
+    item_auctions = df[df['item_id'] == item_id]
+
+    single_item_df = pd.DataFrame({
+        'auction_id': [0],
+        'item_id': [item_id],
+        'bid': [bid],
+        'buyout': [buyout],
+        'quantity': [quantity],
+        'time_left': time_left,
+        'hours_since_first_appearance': [0],
+    })
+
+    single_item_df['item_id'] = single_item_df['item_id'].astype(int)
+    items_df['item_id'] = items_df['item_id'].astype(int)
+
+    single_item_df = single_item_df.merge(items_df, on='item_id', how='left')
+    merged_df = pd.concat([item_auctions, single_item_df], ignore_index=True)
+
+    auctions = []
+
+    for index, auction in merged_df.iterrows():
+        auction_id = auction['auction_id']
+        item_id = auction['item_id']
+        time_left_numeric = time_left_mapping.get(auction['time_left'], 0) / 48.0
+        bid = np.log1p(auction['bid'] / 10000.0) / 15.0
+        buyout = np.log1p(auction['buyout'] / 10000.0) / 15.0
+        quantity = auction['quantity'] / 200.0
+        item_index = item_to_index.get(item_id, 1)
+        hours_since_first_appearance = auction['hours_since_first_appearance'] / 48.0
+
+        processed_auction = [
+            auction_id,
+            bid, 
+            buyout,  
+            quantity, 
+            item_index,
+            time_left_numeric, 
+            hours_since_first_appearance
+        ]
+
+        auctions.append(processed_auction)
+
+    auctions = np.array(auctions)
+    X = torch.tensor(auctions[:, 1:], dtype=torch.float32)
+    lengths = torch.tensor([len(auctions)])
+
+    y = model(X.unsqueeze(0), lengths)
+
+    prediction = round(y[0][-1].item(), 2)
+    sale_probability = np.exp(-lambda_value * y[0][-1].item())
+
+    return f"Your item has a sale probability of {sale_probability * 100:.2f}%. Estimated sale time {prediction:.2f} hours."
+    
+
 def get_suggested_items(realm_id, faction, item_class, item_subclass, desired_profit, sale_probability, price_filter_max):
     suggested_items = df.copy()
 
@@ -204,6 +260,19 @@ def get_suggested_items(realm_id, faction, item_class, item_subclass, desired_pr
 
 with gr.Blocks(title="Auction Tools") as demo:
     gr.Markdown("## Maximize your auction profits!")
+
+    with gr.Tab("Sale Prediction"):
+        gr.Markdown("### Predict when your item will sell")
+        realm_id_input = gr.Textbox(label="Realm ID", value=str(config["realm_id"]))
+        faction_input = gr.Radio(["Alliance", "Horde"], label="Faction", value="Alliance")
+        item_input = gr.Textbox(label="Item ID")
+        quantity_input = gr.Number(label="Quantity")
+        buyout_input = gr.Number(label="Buyout")
+        bid_input = gr.Number(label="Bid")
+        time_left_input = gr.Dropdown(time_left_options, label="Time Left")
+        predict_button = gr.Button("Predict")
+        prediction_output = gr.Textbox(label="AI Prediction")
+        predict_button.click(predict_item_sale, inputs=[realm_id_input, faction_input, item_input, quantity_input, buyout_input, bid_input, time_left_input], outputs=prediction_output)
 
     with gr.Tab("Resale Suggestions"):
         gr.Markdown("### Discover resale opportunities")
