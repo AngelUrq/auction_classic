@@ -19,7 +19,7 @@ class Encoder(nn.Module):
         self.item_index = item_index
 
         self.embedding = nn.Embedding(n_items, embedding_size)
-        self.rnn = nn.LSTM(input_size + embedding_size, hidden_size, batch_first=True, num_layers=num_layers, bidirectional=bidirectional, dropout=dropout_p)
+        self.rnn = nn.GRU(input_size + embedding_size, hidden_size, batch_first=True, num_layers=num_layers, bidirectional=bidirectional, dropout=dropout_p)
         self.dropout = nn.Dropout(dropout_p)
 
     def forward(self, X, lengths):
@@ -30,9 +30,9 @@ class Encoder(nn.Module):
         X = torch.cat([X, item_embeddings], dim=2)
         X_packed = pack_padded_sequence(X, lengths, batch_first=True, enforce_sorted=False)
 
-        output_packed, (hidden, cell) = self.rnn(X_packed)
+        output_packed, hidden = self.rnn(X_packed)
 
-        return output_packed, (hidden, cell)
+        return output_packed, hidden
 
 
 class Decoder(nn.Module):
@@ -40,7 +40,7 @@ class Decoder(nn.Module):
     def __init__(self, input_size, hidden_size, num_layers=2, bidirectional=True, dropout_p=0.1):
         super(Decoder, self).__init__()
         output_size = hidden_size * 2 if bidirectional else hidden_size
-        self.rnn = nn.LSTM(input_size, hidden_size, batch_first=True, num_layers=num_layers, bidirectional=bidirectional, dropout=dropout_p)
+        self.rnn = nn.GRU(input_size, hidden_size, batch_first=True, num_layers=num_layers, bidirectional=bidirectional, dropout=dropout_p)
         self.projection = nn.Linear(output_size, 1)
 
     def forward(self, encoder_outputs, encoder_hidden):
