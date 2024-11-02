@@ -8,8 +8,11 @@ import math
 
 def create_access_token(client_id, client_secret, region='us'):
     data = {'grant_type': 'client_credentials'}
-    response = requests.post('https://%s.battle.net/oauth/token' %
-                             region, data=data, auth=(client_id, client_secret))
+    response = requests.post(
+        f'https://{region}.battle.net/oauth/token',
+        data=data,
+        auth=(client_id, client_secret)
+    )
     return response.json()
 
 
@@ -32,20 +35,28 @@ def get_current_auctions(config):
     response = create_access_token(config['client_key'], config['secret_key'])
     token = response['access_token']
     print('Token created')
-
-    response = requests.get('https://us.api.blizzard.com/data/wow/connected-realm/{}/auctions/{}?namespace=dynamic-classic-us&locale=en_US&access_token={}'.format(
-        config['realm_id'], config['auction_house_id'], token))
-
+    
+    headers = {
+        'Authorization': f'Bearer {token}',
+        'Accept': 'application/json'
+    }
+    
+    url = (
+        'https://us.api.blizzard.com/data/wow/connected-realm/'
+        f"{config['realm_id']}/auctions/{config['auction_house_id']}"
+        '?namespace=dynamic-classic-us&locale=en_US'
+    )
+    
+    response = requests.get(url, headers=headers)
     print('Request done')
-
+    
     data = response.json()
-
+    
     auctions = []
-
     for auction in data['auctions']:
         auctions.append(process_auction(auction))
-
-    print(str(len(auctions)) + ' auctions processed.')
+    
+    print(f'{len(auctions)} auctions processed.')
     
     return auctions
 

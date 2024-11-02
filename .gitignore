@@ -50,6 +50,7 @@ pip-log.txt
 pip-delete-this-directory.txt
 
 models/
+ui/sample/
 
 # Unit test / coverage reports
 htmlcov/
