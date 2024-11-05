@@ -58,7 +58,20 @@ def process_auctions(args):
 
         with open(os.path.join(args.output_dir, 'auction_indices.csv'), 'w', newline='') as csvfile:
             writer = csv.writer(csvfile)
-            writer.writerow(['record', 'item_id', 'group_len', 'group_mean', 'group_std', 'group_min', 'group_max', 'expansion'])
+            writer.writerow([
+                'record', 
+                'item_id', 
+                'group_hours_on_sale_len',
+                'group_hours_on_sale_mean',
+                'group_hours_on_sale_std',
+                'group_hours_on_sale_min',
+                'group_hours_on_sale_max',
+                'group_hours_since_first_appearance_mean',
+                'group_hours_since_first_appearance_std',
+                'group_hours_since_first_appearance_min',
+                'group_hours_since_first_appearance_max',
+                'expansion'
+            ])
 
     if not os.path.exists(os.path.join(args.output_dir, h5_filename)):
         print(f'Creating {h5_filename}')
@@ -121,16 +134,35 @@ def process_auctions(args):
                 
             for item_id, auctions in auctions_by_item.items():
                 item_hours_on_sale = np.array([auction[6] for auction in auctions])
+                item_hours_since_first_appearance = np.array([auction[5] for auction in auctions])
 
-                group_mean = round(np.mean(item_hours_on_sale), 2)
-                group_std = round(np.std(item_hours_on_sale), 2)
-                group_min = round(np.min(item_hours_on_sale), 2)
-                group_max = round(np.max(item_hours_on_sale), 2)
-                group_len = len(item_hours_on_sale)
+                group_hours_on_sale_mean = round(np.mean(item_hours_on_sale), 2)
+                group_hours_on_sale_std = round(np.std(item_hours_on_sale), 2)
+                group_hours_on_sale_min = round(np.min(item_hours_on_sale), 2)
+                group_hours_on_sale_max = round(np.max(item_hours_on_sale), 2)
+                group_hours_on_sale_len = len(item_hours_on_sale)
+
+                group_hours_since_first_appearance_mean = round(np.mean(item_hours_since_first_appearance), 2)
+                group_hours_since_first_appearance_std = round(np.std(item_hours_since_first_appearance), 2)
+                group_hours_since_first_appearance_min = round(np.min(item_hours_since_first_appearance), 2)
+                group_hours_since_first_appearance_max = round(np.max(item_hours_since_first_appearance), 2)
 
                 expansion = 'cata' if prediction_time > datetime(2024, 6, 1) else 'wotlk'
 
-                auction_indices.append((prediction_time.strftime('%Y-%m-%d %H:%M:%S'), item_id, group_len, group_mean, group_std, group_min, group_max, expansion))
+                auction_indices.append((
+                    prediction_time.strftime('%Y-%m-%d %H:%M:%S'), 
+                    item_id, 
+                    group_hours_on_sale_len, 
+                    group_hours_on_sale_mean, 
+                    group_hours_on_sale_std, 
+                    group_hours_on_sale_min, 
+                    group_hours_on_sale_max,
+                    group_hours_since_first_appearance_mean,
+                    group_hours_since_first_appearance_std,
+                    group_hours_since_first_appearance_min,
+                    group_hours_since_first_appearance_max,
+                    expansion
+                ))
                                 
                 dataset_name = f'{item_id}'
                 if dataset_name in h5_file[group_path]:
