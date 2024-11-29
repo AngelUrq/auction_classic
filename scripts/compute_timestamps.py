@@ -35,7 +35,8 @@ def process_auctions(args):
                     if auction_id not in auction_appearances:
                         auction_appearances[auction_id] = {
                             'first_appearance': timestamp.strftime("%Y-%m-%d %H:%M:%S"), 
-                            'last_appearance': timestamp.strftime("%Y-%m-%d %H:%M:%S")
+                            'last_appearance': timestamp.strftime("%Y-%m-%d %H:%M:%S"),
+                            'item_id': auction['item']['id'],
                         }
                     else:
                         auction_appearances[auction_id]['last_appearance'] = timestamp.strftime("%Y-%m-%d %H:%M:%S")
