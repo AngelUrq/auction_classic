@@ -53,6 +53,7 @@ class Decoder(nn.Module):
 
 
 class AuctionRNN(nn.Module):
+    
     def __init__(self, n_items, num_layers=2, input_size=5, encoder_hidden_size=16, decoder_hidden_size=16, item_index=3, embedding_size=16, dropout_p=0.1, bidirectional=True):
         super(AuctionRNN, self).__init__()
         decoder_input_size = encoder_hidden_size * 2 if bidirectional else encoder_hidden_size
@@ -64,13 +65,29 @@ class AuctionRNN(nn.Module):
         decoder_outputs = self.decoder(encoder_outputs, encoder_hidden)
         return decoder_outputs
 
+
 class AuctionTransformer(nn.Module):
 
-    def __init__(self, n_items):
-        encoder_layer = nn.TransformerEncoderLayer(d_model=512, nhead=8)
-        self.transformer_encoder = nn.TransformerEncoder(encoder_layer, num_layers=6)
-        src = torch.rand(10, 32, 512)
-        out = transformer_encoder(src)
+    def __init__(self, input_size, n_items, embedding_dim, d_model, dim_feedforward, nhead, num_layers, dropout_p=0.1):
+        super(AuctionTransformer, self).__init__()
 
-    def forward(self, X, lengths):
-        pass
+        self.input_projection = nn.Linear(input_size - 1 + embedding_dim, d_model)
+        self.output_projection = nn.Linear(d_model, 1)
+        self.item_embeddings = nn.Embedding(n_items, embedding_dim)
+        self.dropout = nn.Dropout(dropout_p)
+        
+        encoder_layer = nn.TransformerEncoderLayer(d_model=d_model, nhead=nhead, dim_feedforward=dim_feedforward, batch_first=True, dropout=dropout_p)
+        self.encoder = nn.TransformerEncoder(encoder_layer, num_layers=num_layers)
+
+    def forward(self, X):
+        item_ids = X[:, :, 0].long()
+        item_features = X[:, :, 1:]
+
+        item_embeddings = self.dropout(self.item_embeddings(item_ids))
+        X = torch.cat([item_features, item_embeddings], dim=-1)
+
+        X = self.input_projection(X)
+        X = self.encoder(X)
+        X = self.output_projection(X)
+
+        return X
