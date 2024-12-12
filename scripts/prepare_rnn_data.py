@@ -37,7 +37,9 @@ exclude_first_times = [
     '24-09-2024',
     '25-09-2024',
 ]
+
 def process_auctions(args):
+    print('Processing auctions...')
     file_info = {}
     data_dir = args.data_dir
     h5_filename = 'sequences.h5'
@@ -113,10 +115,10 @@ def process_auctions(args):
             hours_on_sale = (last_appearance - prediction_time).total_seconds() / 3600
 
             processed_auction = [
+                item_id,
                 bid,
                 buyout,
                 quantity,
-                item_id,
                 time_left_to_int.get(time_left, 0),
                 hours_since_first_appearance,
                 hours_on_sale

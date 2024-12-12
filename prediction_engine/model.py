@@ -52,9 +52,9 @@ class Decoder(nn.Module):
         return output
 
 
-class AuctionPredictor(nn.Module):
+class AuctionRNN(nn.Module):
     def __init__(self, n_items, num_layers=2, input_size=5, encoder_hidden_size=16, decoder_hidden_size=16, item_index=3, embedding_size=16, dropout_p=0.1, bidirectional=True):
-        super(AuctionPredictor, self).__init__()
+        super(AuctionRNN, self).__init__()
         decoder_input_size = encoder_hidden_size * 2 if bidirectional else encoder_hidden_size
         self.encoder = Encoder(n_items, input_size=input_size, item_index=item_index, embedding_size=embedding_size, hidden_size=encoder_hidden_size, dropout_p=dropout_p, num_layers=num_layers, bidirectional=bidirectional)
         self.decoder = Decoder(decoder_input_size, decoder_hidden_size, num_layers=num_layers, bidirectional=bidirectional, dropout_p=dropout_p)
@@ -63,3 +63,14 @@ class AuctionPredictor(nn.Module):
         encoder_outputs, encoder_hidden = self.encoder(X, lengths)
         decoder_outputs = self.decoder(encoder_outputs, encoder_hidden)
         return decoder_outputs
+
+class AuctionTransformer(nn.Module):
+
+    def __init__(self, n_items):
+        encoder_layer = nn.TransformerEncoderLayer(d_model=512, nhead=8)
+        self.transformer_encoder = nn.TransformerEncoder(encoder_layer, num_layers=6)
+        src = torch.rand(10, 32, 512)
+        out = transformer_encoder(src)
+
+    def forward(self, X, lengths):
+        pass

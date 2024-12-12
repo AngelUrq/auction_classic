@@ -8,10 +8,10 @@ class AuctionDataset(torch.utils.data.Dataset):
     def __init__(self, pairs, item_to_index, path='../generated/sequences.h5', weekly_hours='../generated/weekly_hours.csv'):
         self.pairs = pairs
         self.column_map = {
-            'bid': 0,
-            'buyout': 1,
-            'quantity': 2,
-            'item_id': 3,
+            'item_id': 0,
+            'bid': 1,
+            'buyout': 2,
+            'quantity': 3,
             'time_left': 4,
             'hours_since_first_appearance': 5,
             'hour': 6,
