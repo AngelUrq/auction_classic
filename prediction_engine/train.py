@@ -40,11 +40,11 @@ def train(
         mse_losses = []
         mae_losses = []
         
-        for i, (X, y, lengths) in enumerate(tqdm(train_loader, total=len(train_loader))):                
+        for i, (X, y, lengths) in enumerate(tqdm(train_loader, total=len(train_loader))):
             X = X.to(device, non_blocking=True)
             y = y.to(device, non_blocking=True)
 
-            y_pred = model(X, lengths)
+            y_pred = model(X)
             mask = (y != 0).float().unsqueeze(2)
 
             loss = criterion(y_pred * mask, y.unsqueeze(2)) / mask.sum()
@@ -113,7 +113,7 @@ def evaluate(
       y = y.to(device)
       lengths = lengths.cpu()
 
-      y_pred = model(X, lengths)
+      y_pred = model(X)
 
       mask = (y != 0).float().unsqueeze(2)
       loss = criterion(y_pred * mask, y.unsqueeze(2)) / mask.sum()

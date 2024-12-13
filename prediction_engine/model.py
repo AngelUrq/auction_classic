@@ -82,12 +82,12 @@ class AuctionTransformer(nn.Module):
     def forward(self, X):
         item_ids = X[:, :, 0].long()
         item_features = X[:, :, 1:]
-
         item_embeddings = self.dropout(self.item_embeddings(item_ids))
-        X = torch.cat([item_features, item_embeddings], dim=-1)
-
-        X = self.input_projection(X)
-        X = self.encoder(X)
-        X = self.output_projection(X)
-
+        
+        combined_features = torch.cat([item_features, item_embeddings], dim=-1)
+        
+        X = self.input_projection(combined_features)
+        context = self.encoder(X)
+        X = self.output_projection(X + context)
+        
         return X
