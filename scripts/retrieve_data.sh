@@ -1,15 +1,25 @@
 #!/bin/bash
 
-echo "Retrieving token"
+echo "Retrieving token..."
 
-# Configuration
 client_key=""
 secret_key=""
 realm_id="4408"
 auction_house_id="6"
 
+if [ -z "$client_key" ] || [ -z "$secret_key" ]; then
+    echo "Error: CLIENT_KEY and SECRET_KEY must be set" >&2
+    exit 1
+fi
+
 # Get OAuth token
 token=`curl -u $client_key:$secret_key -d grant_type=client_credentials https://us.battle.net/oauth/token | jq -r '.access_token'`
+echo "Token retrieved $token"
+
+if [ "$token" = "null" ]; then
+    echo "Error: Token is null" >&2
+    exit 1
+fi
 
 # Create directory structure using yyyy/mm/dd format
 data_dir="data"
