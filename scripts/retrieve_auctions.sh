@@ -1,14 +1,24 @@
 #!/bin/bash
 
-echo "Retrieving token"
+echo "Retrieving token..."
 
-# Configuration
 client_key="c39078bd5f0f4e798a3a1b734dd9d280"
 secret_key="4UEplhA8jYa8wvX58C5QdV7JDTDY9rNX"
 realm_id="3676"
 
+if [ -z "$client_key" ] || [ -z "$secret_key" ]; then
+    echo "Error: CLIENT_KEY and SECRET_KEY must be set" >&2
+    exit 1
+fi
+
 # Get OAuth token
 token=`curl -u $client_key:$secret_key -d grant_type=client_credentials https://us.battle.net/oauth/token | jq -r '.access_token'`
+echo "Token retrieved $token"
+
+if [ "$token" = "null" ]; then
+    echo "Error: Token is null" >&2
+    exit 1
+fi
 
 # Create directory structure using yyyy/mm/dd format
 data_dir="/media/pi/USB-DATA/auctions"

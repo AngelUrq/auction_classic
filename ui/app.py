@@ -8,6 +8,7 @@ import pickle
 import numpy as np
 import time
 
+from datetime import datetime, timedelta
 from pathlib import Path
 
 wd = Path(__file__).parent.parent.resolve()
@@ -17,6 +18,7 @@ from datetime import datetime
 from scripts.utils import get_current_auctions
 from tqdm import tqdm
 from prediction_engine.model import AuctionPredictor
+from prediction_engine.inference import predict_dataframe
 
 base_path = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 lambda_value = 0.0401
@@ -26,15 +28,39 @@ with open(os.path.join(base_path, "scripts", "config.json")) as json_data:
 
 time_left_options = [12, 24, 48]
 
-if not os.path.exists('auctions.pkl'):
-    auction_data = get_current_auctions(config)
-    with open('auctions.pkl', 'wb') as f:
-        pickle.dump(auction_data, f)
-else:
+def load_auctions():
+    if not os.path.exists('auctions.pkl'):
+        print("No saved auction data found, fetching new data...")
+        auction_data = get_current_auctions(config)
+        data_with_timestamp = {
+            'timestamp': datetime.now(),
+            'data': auction_data
+        }
+        with open('auctions.pkl', 'wb') as f:
+            pickle.dump(data_with_timestamp, f)
+        return auction_data
+    
     with open('auctions.pkl', 'rb') as f:
-        auction_data = pickle.load(f)
+        saved_data = pickle.load(f)
+    
+    current_time = datetime.now()
+    time_difference = current_time - saved_data['timestamp']
+    
+    if time_difference > timedelta(hours=1):
+        print("Saved auction data is older than 1 hour, fetching new data...")
+        auction_data = get_current_auctions(config)
+        data_with_timestamp = {
+            'timestamp': current_time,
+            'data': auction_data
+        }
+        with open('auctions.pkl', 'wb') as f:
+            pickle.dump(data_with_timestamp, f)
+        return auction_data
+    
+    return saved_data['data']
 
-df = pd.DataFrame(auction_data, columns=['auction_id', 'item_id', 'bid', 'buyout', 'quantity', 'time_left', 'rand', 'seed'])
+auction_data = load_auctions()
+df = pd.DataFrame(auction_data, columns=['id', 'item_id', 'bid', 'buyout', 'quantity', 'time_left', 'rand', 'seed'])
 df = df.drop(columns=['rand', 'seed'])
 
 items_df = pd.read_csv(os.path.join(base_path, "data", "items.csv"))
@@ -45,8 +71,6 @@ df['unit_price'] = df['buyout'] / df['quantity']
 
 df = df.merge(items_df, on='item_id', how='inner')
 df = df.drop(columns=['sell_price_silver', 'purchase_price_silver'], errors='ignore')
-
-df.to_csv(os.path.join(base_path, "ui", "auctions.csv"), index=False)
 
 print("Data loaded and prepared successfully.")
 
@@ -64,22 +88,22 @@ time_left_mapping = {
 }
 
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
-device = 'cpu'
 
 model = AuctionPredictor(
     n_items=len(item_to_index),             
     input_size=5,                   
-    encoder_hidden_size=1024,
-    decoder_hidden_size=1024,
+    encoder_hidden_size=2048,
+    decoder_hidden_size=2048,
+    num_layers=3,
     item_index=3,                   
-    embedding_size=512,
+    embedding_size=1024,
     dropout_p=0.2,
     bidirectional=False
 ).to(device)
 
 print(f'Number of model parameters: {sum(p.numel() for p in model.parameters())}')
 
-model_path = os.path.join(base_path, "models", "checkpoint_epoch_1_iter_10336.pt")
+model_path = os.path.join(base_path, "models", "checkpoint_epoch_0_iter_51115.pt")
 checkpoint = torch.load(model_path, map_location=device)
 
 model.load_state_dict(checkpoint['model_state_dict'])
@@ -137,11 +161,13 @@ def compute_auctions_appearances(data_dir):
 auction_appearances = compute_auctions_appearances(os.path.join(base_path, "ui", "sample"))
 
 def predict_item_sale(realm_id, faction, item_id, quantity, buyout, bid, time_left):
+    raise NotImplementedError("This function hasn't been implemented yet")
+
     item_id = int(item_id)
     item_auctions = df[df['item_id'] == item_id]
 
     single_item_df = pd.DataFrame({
-        'auction_id': [0],
+        'id': [0],
         'item_id': [item_id],
         'bid': [bid],
         'buyout': [buyout],
@@ -155,39 +181,6 @@ def predict_item_sale(realm_id, faction, item_id, quantity, buyout, bid, time_le
 
     single_item_df = single_item_df.merge(items_df, on='item_id', how='left')
     merged_df = pd.concat([item_auctions, single_item_df], ignore_index=True)
-
-    auctions = []
-
-    for index, auction in merged_df.iterrows():
-        auction_id = auction['auction_id']
-        item_id = auction['item_id']
-        time_left_numeric = time_left_mapping.get(auction['time_left'], 0) / 48.0
-        bid = np.log1p(auction['bid'] / 10000.0) / 15.0
-        buyout = np.log1p(auction['buyout'] / 10000.0) / 15.0
-        quantity = auction['quantity'] / 200.0
-        item_index = item_to_index.get(item_id, 1)
-        hours_since_first_appearance = auction['hours_since_first_appearance'] / 48.0
-
-        processed_auction = [
-            auction_id,
-            bid, 
-            buyout,  
-            quantity, 
-            item_index,
-            time_left_numeric, 
-            hours_since_first_appearance
-        ]
-
-        auctions.append(processed_auction)
-
-    auctions = np.array(auctions)
-    X = torch.tensor(auctions[:, 1:], dtype=torch.float32)
-    lengths = torch.tensor([len(auctions)])
-
-    y = model(X.unsqueeze(0), lengths)
-
-    prediction = round(y[0][-1].item(), 2)
-    sale_probability = np.exp(-lambda_value * y[0][-1].item())
 
     return f"Your item has a sale probability of {sale_probability * 100:.2f}%. Estimated sale time {prediction:.2f} hours."
     
@@ -205,57 +198,21 @@ def get_suggested_items(realm_id, faction, item_class, item_subclass, desired_pr
     prediction_time = datetime.now()
     prediction_time = prediction_time.replace(minute=0, second=0, microsecond=0)
 
-    suggested_items['first_appearance'] = suggested_items['auction_id'].apply(lambda x: auction_appearances[int(x)]['first'] if x in auction_appearances else prediction_time)
+    suggested_items['first_appearance'] = suggested_items['id'].apply(lambda x: auction_appearances[int(x)]['first'] if x in auction_appearances else prediction_time)
     suggested_items['hours_since_first_appearance'] = (prediction_time - pd.to_datetime(suggested_items['first_appearance'])).dt.total_seconds() / 3600
 
-    auctions_by_item = {}
+    print("Predicting sale times for items...")
+    suggested_items = predict_dataframe(model, suggested_items, prediction_time, time_left_mapping, item_to_index, lambda_value, device)    
 
-    for item_id in tqdm(suggested_items['item_id'].unique()):
-        for index, auction in suggested_items[suggested_items['item_id'] == item_id].iterrows():
-            auction_id = auction['auction_id']
-            item_id = auction['item_id']
-            time_left_numeric = time_left_mapping.get(auction['time_left'], 0) / 48.0
-            bid = np.log1p(auction['bid'] / 10000.0) / 15.0
-            buyout = np.log1p(auction['buyout'] / 10000.0) / 15.0
-            quantity = auction['quantity'] / 200.0
-            item_index = item_to_index.get(item_id, 1)
-            hours_since_first_appearance = auction['hours_since_first_appearance'] / 48.0
-
-            processed_auction = [
-                auction_id,
-                bid, 
-                buyout,  
-                quantity, 
-                item_index,
-                time_left_numeric, 
-                hours_since_first_appearance
-            ]
-            
-            if item_index not in auctions_by_item:
-                auctions_by_item[item_index] = []
-
-            auctions_by_item[item_index].append(processed_auction)
-
-    for item_index in auctions_by_item:
-        auctions_by_item[item_index] = np.array(auctions_by_item[item_index])
-        
-        X = torch.tensor(auctions_by_item[item_index][:, 1:], dtype=torch.float32)
-        lengths = torch.tensor([len(auctions_by_item[item_index])])
-        y = model(X.unsqueeze(0), lengths)
-
-        for i, auction_id in enumerate(auctions_by_item[item_index][:, 0]):
-            suggested_items.loc[suggested_items['auction_id'] == auction_id, 'prediction'] = round(y[0][i].item(), 2)
-            suggested_items.loc[suggested_items['auction_id'] == auction_id, 'sale_probability'] = np.exp(-lambda_value * y[0][i].item())
-
-    # Filter out items with buyout price greater than price_filter_max
     if price_filter_max:
         suggested_items = suggested_items[suggested_items['buyout'] <= price_filter_max]
 
-    # Filter out items with probability of sale less than sale_probability
-    # if sale_probability:
-    #    suggested_items = suggested_items[suggested_items['probability_of_sale'] >= sale_probability]
+    if sale_probability:
+        suggested_items = suggested_items[suggested_items['sale_probability'] >= sale_probability]
 
-    return suggested_items[['item_name', 'item_class', 'item_subclass', 'bid', 'buyout', 'quantity', 'time_left', 'hours_since_first_appearance', 'prediction', 'probability_of_sale']]
+    suggested_items = suggested_items.sort_values(by='sale_probability', ascending=False)
+
+    return suggested_items[['item_name', 'item_class', 'item_subclass', 'bid', 'buyout', 'quantity', 'time_left', 'first_appearance', 'hours_since_first_appearance', 'prediction', 'sale_probability']]
 
 
 with gr.Blocks(title="Auction Tools") as demo:

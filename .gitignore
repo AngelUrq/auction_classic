@@ -1,4 +1,4 @@
-data/auctions/
+data/auctions_wotlk/
 eval/sample/
 config.json
 # Byte-compiled / optimized / DLL files
@@ -8,6 +8,9 @@ __pycache__/
 *.db
 *.pkl
 *.xlsx
+
+# Ignore all logs
+prediction_engine/logs/*
 
 # C extensions
 *.so
@@ -50,6 +53,7 @@ pip-log.txt
 pip-delete-this-directory.txt
 
 models/
+ui/sample/
 
 # Unit test / coverage reports
 htmlcov/
