@@ -20,6 +20,28 @@ class AuctionDataset(torch.utils.data.Dataset):
         self.item_to_index = item_to_index
         self.path = path
         
+        self.feature_means = torch.tensor([
+            0.0,  # item_id (not used)
+            3.5345,  # bid
+            3.6229,  # buyout
+            4.4875,  # quantity
+            29.2148,  # time_left
+            7.8065,  # hours_since_first_appearance
+            0.1281,  # hour
+            -0.0306,  # weekday
+        ])
+        
+        self.feature_stds = torch.tensor([
+            1.0,  # item_id (not used)
+            2.1194,  # bid
+            2.1507,  # buyout
+            44.1100,  # quantity
+            19.2267,  # time_left
+            7.5708,  # hours_since_first_appearance
+            0.7001,  # hour
+            0.7049,  # weekday
+        ])
+        
         print(f"Dataset size: {len(self)}")
     
     def __len__(self):
@@ -49,22 +71,26 @@ class AuctionDataset(torch.utils.data.Dataset):
         # Add columns for hour, weekday
         X = torch.cat((X, torch.zeros((X.size(0), 2))), dim=1)
         
+        # Process item_id separately (no normalization needed)
         X[:, self.column_map['item_id']] = torch.tensor(
             [self.item_to_index.get(int(item), 1) for item in X[:, self.column_map['item_id']]], 
             dtype=torch.long
         )
-        X[:, self.column_map['time_left']] = X[:, self.column_map['time_left']] / 48.0
-        X[:, self.column_map['hours_since_first_appearance']] = X[:, self.column_map['hours_since_first_appearance']] / 48.0
-        X[:, self.column_map['bid']] = torch.log1p(X[:, self.column_map['bid']]) / 15.0
-        X[:, self.column_map['buyout']] = torch.log1p(X[:, self.column_map['buyout']]) / 15.0
-        X[:, self.column_map['quantity']] = X[:, self.column_map['quantity']] / 200.0
+        
+        # Apply log1p transformation before normalization for bid and buyout
+        X[:, self.column_map['bid']] = torch.log1p(X[:, self.column_map['bid']])
+        X[:, self.column_map['buyout']] = torch.log1p(X[:, self.column_map['buyout']])
+        
+        # Add hour and weekday features
         X[:, self.column_map['hour']] = np.sin(2 * np.pi * hour / 24)
         X[:, self.column_map['weekday']] = np.sin(2 * np.pi * weekday / 7)
         
-        # Randomly permute the sequences
-        indices = torch.randperm(X.size(0))
-        X = X[indices]
-        y = y[indices]
+        # Normalize all features except item_id
+        for col, idx in self.column_map.items():
+            if col != 'item_id':
+                X[:, idx] = (X[:, idx] - self.feature_means[idx]) / self.feature_stds[idx]
+
+        y = y / 48.0
         
         return X, y
         

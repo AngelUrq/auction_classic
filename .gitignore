@@ -9,6 +9,9 @@ __pycache__/
 *.pkl
 *.xlsx
 
+# Ignore all logs
+prediction_engine/logs/*
+
 # C extensions
 *.so
 

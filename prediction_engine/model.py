@@ -64,30 +64,3 @@ class AuctionRNN(nn.Module):
         encoder_outputs, encoder_hidden = self.encoder(X, lengths)
         decoder_outputs = self.decoder(encoder_outputs, encoder_hidden)
         return decoder_outputs
-
-
-class AuctionTransformer(nn.Module):
-
-    def __init__(self, input_size, n_items, embedding_dim, d_model, dim_feedforward, nhead, num_layers, dropout_p=0.1):
-        super(AuctionTransformer, self).__init__()
-
-        self.input_projection = nn.Linear(input_size - 1 + embedding_dim, d_model)
-        self.output_projection = nn.Linear(d_model, 1)
-        self.item_embeddings = nn.Embedding(n_items, embedding_dim)
-        self.dropout = nn.Dropout(dropout_p)
-        
-        encoder_layer = nn.TransformerEncoderLayer(d_model=d_model, nhead=nhead, dim_feedforward=dim_feedforward, batch_first=True, dropout=dropout_p)
-        self.encoder = nn.TransformerEncoder(encoder_layer, num_layers=num_layers)
-
-    def forward(self, X):
-        item_ids = X[:, :, 0].long()
-        item_features = X[:, :, 1:]
-        item_embeddings = self.dropout(self.item_embeddings(item_ids))
-        
-        combined_features = torch.cat([item_features, item_embeddings], dim=-1)
-        
-        X = self.input_projection(combined_features)
-        context = self.encoder(X)
-        X = self.output_projection(X + context)
-        
-        return X
