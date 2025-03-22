@@ -53,7 +53,7 @@ def process_auctions(args):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Check JSON files in auctions folder')
     parser.add_argument('--data_dir', type=str, required=True, help='Path to the auctions folder')
-    parser.add_argument('--output_file', type=str, required=True, help='Path to the output file')
+    parser.add_argument('--output_file', type=str, required=True, help='Path to the output file (generated/timestamps.json)')
     args = parser.parse_args()
 
     start_time = time.time()

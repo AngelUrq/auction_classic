@@ -17,8 +17,8 @@ sys.path.append(str(wd))
 from datetime import datetime
 from scripts.utils import get_current_auctions
 from tqdm import tqdm
-from prediction_engine.model import AuctionPredictor
-from prediction_engine.inference import predict_dataframe
+from src.models.auction_rnn import AuctionPredictor
+from src.models.inference import predict_dataframe
 
 base_path = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 lambda_value = 0.0401

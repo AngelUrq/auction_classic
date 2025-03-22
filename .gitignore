@@ -9,6 +9,12 @@ __pycache__/
 *.pkl
 *.xlsx
 
+data/tww/
+
+.vscode/
+
+notebooks/logs/
+
 # Ignore all logs
 prediction_engine/logs/*
 
