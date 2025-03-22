@@ -14,6 +14,7 @@ data/tww/
 .vscode/
 
 notebooks/logs/
+data/sample/
 
 # Ignore all logs
 prediction_engine/logs/*
