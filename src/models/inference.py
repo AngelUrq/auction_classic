@@ -1,0 +1,112 @@
+import torch
+import numpy as np
+import pandas as pd
+from tqdm import tqdm
+import torch.nn.functional as F
+from src.data.utils import pad_tensors_to_max_size
+
+@torch.no_grad()
+def predict_dataframe(model, df_auctions, feature_stats, lambda_value=0.0401):
+    model.eval()
+
+    # Group auctions by item_index
+    auctions_by_item = {}
+    for group_item_index in tqdm(df_auctions['item_index'].unique()):
+        auctions_by_item[group_item_index] = []
+        df_auctions_group = df_auctions[df_auctions['item_index'] == group_item_index]
+
+        for index, auction in df_auctions_group.iterrows():
+            auction_id = auction['id']
+            item_index = auction['item_index']
+            time_left = auction['time_left']
+            
+            # Apply log1p transformation for bid and buyout
+            bid = np.log1p(auction['bid'])
+            buyout = np.log1p(auction['buyout'])
+            quantity = auction['quantity']
+            current_hours = auction['current_hours']
+            
+            # Get hour and weekday if available, otherwise use defaults
+            hour = auction.get('hour', 0)
+            weekday = auction.get('weekday', 0)
+            
+            # Convert hour and weekday to sinusoidal representation
+            hour_sin = np.sin(2 * np.pi * hour / 24)
+            weekday_sin = np.sin(2 * np.pi * weekday / 7)
+
+            # Apply log1p to modifier values
+            modifier_values = np.log1p(np.array(auction.get('modifier_values', [])))
+
+            # Store the processed auction with its ID
+            processed_auction = {
+                'id': auction_id,
+                'features': [bid, buyout, quantity, time_left, current_hours, hour_sin, weekday_sin],
+                'item_index': item_index,
+                'context': auction.get('context', 0),
+                'bonus_list': auction.get('bonus_list', [0]),
+                'modifier_types': auction.get('modifier_types', [0]),
+                'modifier_values': modifier_values
+            }
+            
+            auctions_by_item[group_item_index].append(processed_auction)
+
+    # Initialize prediction columns
+    df_auctions['prediction'] = 0.0
+    df_auctions['sale_probability'] = 0.0
+
+    skipped_item_indices = []
+    skipped_auctions = 0
+
+    # Process each group of auctions
+    for group_item_index in tqdm(list(auctions_by_item.keys())):
+        auctions = auctions_by_item[group_item_index]
+        
+        if len(auctions) > 32:
+            skipped_item_indices.append(group_item_index)
+            skipped_auctions += len(auctions)
+            continue
+            
+        # Extract features and normalize them
+        auction_features = [torch.tensor(a['features'], dtype=torch.float32) for a in auctions]
+        auction_features = pad_tensors_to_max_size(auction_features).to(model.device)
+        
+        # Normalize features
+        auction_features = (auction_features - feature_stats['means'].to(model.device)) / (feature_stats['stds'].to(model.device) + 1e-6)
+        
+        # Prepare other inputs
+        item_indices = torch.tensor([a['item_index'] for a in auctions], dtype=torch.int32).to(model.device)
+        contexts = torch.tensor([a['context'] for a in auctions], dtype=torch.int32).to(model.device)
+        
+        # Handle bonus lists
+        bonus_lists = [torch.tensor(a.get('bonus_list', [0]), dtype=torch.int32) for a in auctions]
+        bonus_lists = pad_tensors_to_max_size(bonus_lists).to(model.device)
+        
+        # Handle modifier types
+        modifier_types = [torch.tensor(a.get('modifier_types', [0]), dtype=torch.int32) for a in auctions]
+        modifier_types = pad_tensors_to_max_size(modifier_types).to(model.device)
+        
+        # Handle modifier values
+        modifier_values = [torch.tensor(a.get('modifier_values', [0.0]), dtype=torch.float32) for a in auctions]
+        modifier_values = pad_tensors_to_max_size(modifier_values).to(model.device)
+        
+        # Normalize modifier values
+        modifier_values = (modifier_values - feature_stats['modifiers_mean'].to(model.device)) / (feature_stats['modifiers_std'].to(model.device) + 1e-6)
+        
+        # Forward pass - add batch dimension
+        X = (auction_features.unsqueeze(0), item_indices.unsqueeze(0), 
+             contexts.unsqueeze(0), bonus_lists.unsqueeze(0), 
+             modifier_types.unsqueeze(0), modifier_values.unsqueeze(0))
+
+        y = model(X)
+        
+        # Update the dataframe with predictions
+        for i, auction in enumerate(auctions):
+            auction_id = auction['id']
+            prediction_value = y[0, i, 0].item() * 48.0  # Scale back from normalized value
+            df_auctions.loc[df_auctions['id'] == auction_id, 'prediction'] = round(prediction_value, 2)
+            df_auctions.loc[df_auctions['id'] == auction_id, 'sale_probability'] = np.exp(-lambda_value * prediction_value)
+
+    print(f'Skipped {skipped_auctions} auctions from {len(auctions_by_item)} item indices')
+    df_auctions = df_auctions[~df_auctions['item_index'].isin(skipped_item_indices)]
+
+    return df_auctions
