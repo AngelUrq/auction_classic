@@ -28,7 +28,7 @@ def pad_tensors_to_max_size(tensor_list):
 
 def collate_auctions(batch):
     inputs, targets = zip(*batch)
-    auctions, item_index, contexts, bonus_lists, modifier_types, modifier_values = zip(*inputs)
+    auctions, item_index, contexts, bonus_lists, modifier_types, modifier_values, current_hours = zip(*inputs)
 
     auctions = pad_tensors_to_max_size(auctions)
     item_index = pad_tensors_to_max_size(item_index)
@@ -36,6 +36,7 @@ def collate_auctions(batch):
     bonus_lists = pad_tensors_to_max_size(bonus_lists)
     modifier_types = pad_tensors_to_max_size(modifier_types)
     modifier_values = pad_tensors_to_max_size(modifier_values)
+    current_hours = pad_tensors_to_max_size(current_hours)
     targets = pad_tensors_to_max_size(targets)
 
-    return (auctions, item_index, contexts, bonus_lists, modifier_types, modifier_values), targets
+    return (auctions, item_index, contexts, bonus_lists, modifier_types, modifier_values, current_hours), targets

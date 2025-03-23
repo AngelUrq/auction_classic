@@ -5,9 +5,9 @@ import pandas as pd
 from datetime import datetime
 
 class AuctionDataset(torch.utils.data.Dataset):
-    def __init__(self, pairs, feature_stats_path='../generated/feature_stats.pt', path='../generated/sequences.h5', normalization=True):
+    def __init__(self, pairs, feature_stats=None, path='../generated/sequences.h5'):
         self.pairs = pairs
-        self.normalization = normalization
+        self.feature_stats = feature_stats
         self.column_map = {
             'bid': 0,
             'buyout': 1,
@@ -18,11 +18,6 @@ class AuctionDataset(torch.utils.data.Dataset):
             'weekday': 6,
             'hours_on_sale': 7
         }
-
-        if self.normalization:
-            self.feature_stats = torch.load(feature_stats_path)
-        else:
-            self.feature_stats = None
 
         self.path = path
         
@@ -75,7 +70,9 @@ class AuctionDataset(torch.utils.data.Dataset):
         auctions[:, self.column_map['hour']] = np.sin(2 * np.pi * hour / 24)
         auctions[:, self.column_map['weekday']] = np.sin(2 * np.pi * weekday / 7)
 
-        if self.normalization:
+        current_hours = auctions[:, self.column_map['current_hours']]
+
+        if self.feature_stats:
             # Normalize auction features
             auctions_mean = self.feature_stats['means']
             auctions_std = self.feature_stats['stds']
@@ -90,5 +87,5 @@ class AuctionDataset(torch.utils.data.Dataset):
             
         y = hours_on_sale / 48.0
         
-        return (auctions, item_index, contexts, bonus_lists, modifier_types, modifier_values), y
+        return (auctions, item_index, contexts, bonus_lists, modifier_types, modifier_values, current_hours), y
         
