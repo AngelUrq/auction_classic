@@ -6,7 +6,7 @@ import torch.nn.functional as F
 from src.data.utils import pad_tensors_to_max_size
 
 @torch.no_grad()
-def predict_dataframe(model, df_auctions, feature_stats, lambda_value=0.0401):
+def predict_dataframe(model, df_auctions, prediction_time, feature_stats, lambda_value=0.0401):
     model.eval()
 
     # Group auctions by item_index
@@ -26,9 +26,9 @@ def predict_dataframe(model, df_auctions, feature_stats, lambda_value=0.0401):
             quantity = auction['quantity']
             current_hours = auction['current_hours']
             
-            # Get hour and weekday if available, otherwise use defaults
-            hour = auction.get('hour', 0)
-            weekday = auction.get('weekday', 0)
+            # Get hour and weekday from prediction_time
+            hour = prediction_time.hour
+            weekday = prediction_time.weekday()
             
             # Convert hour and weekday to sinusoidal representation
             hour_sin = np.sin(2 * np.pi * hour / 24)
@@ -42,9 +42,9 @@ def predict_dataframe(model, df_auctions, feature_stats, lambda_value=0.0401):
                 'id': auction_id,
                 'features': [bid, buyout, quantity, time_left, current_hours, hour_sin, weekday_sin],
                 'item_index': item_index,
-                'context': auction.get('context', 0),
-                'bonus_list': auction.get('bonus_list', [0]),
-                'modifier_types': auction.get('modifier_types', [0]),
+                'context': auction['context'],
+                'bonus_lists': auction['bonus_lists'],
+                'modifier_types': auction['modifier_types'],
                 'modifier_values': modifier_values
             }
             
@@ -67,8 +67,7 @@ def predict_dataframe(model, df_auctions, feature_stats, lambda_value=0.0401):
             continue
             
         # Extract features and normalize them
-        auction_features = [torch.tensor(a['features'], dtype=torch.float32) for a in auctions]
-        auction_features = pad_tensors_to_max_size(auction_features).to(model.device)
+        auction_features = torch.stack([torch.tensor(a['features'], dtype=torch.float32) for a in auctions]).to(model.device)
         
         # Normalize features
         auction_features = (auction_features - feature_stats['means'].to(model.device)) / (feature_stats['stds'].to(model.device) + 1e-6)
@@ -78,15 +77,15 @@ def predict_dataframe(model, df_auctions, feature_stats, lambda_value=0.0401):
         contexts = torch.tensor([a['context'] for a in auctions], dtype=torch.int32).to(model.device)
         
         # Handle bonus lists
-        bonus_lists = [torch.tensor(a.get('bonus_list', [0]), dtype=torch.int32) for a in auctions]
+        bonus_lists = [torch.tensor(a['bonus_lists'], dtype=torch.int32) for a in auctions]
         bonus_lists = pad_tensors_to_max_size(bonus_lists).to(model.device)
         
         # Handle modifier types
-        modifier_types = [torch.tensor(a.get('modifier_types', [0]), dtype=torch.int32) for a in auctions]
+        modifier_types = [torch.tensor(a['modifier_types'], dtype=torch.int32) for a in auctions]
         modifier_types = pad_tensors_to_max_size(modifier_types).to(model.device)
         
         # Handle modifier values
-        modifier_values = [torch.tensor(a.get('modifier_values', [0.0]), dtype=torch.float32) for a in auctions]
+        modifier_values = [torch.tensor(a['modifier_values'], dtype=torch.float32) for a in auctions]
         modifier_values = pad_tensors_to_max_size(modifier_values).to(model.device)
         
         # Normalize modifier values

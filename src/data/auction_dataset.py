@@ -20,11 +20,15 @@ class AuctionDataset(torch.utils.data.Dataset):
         }
 
         self.path = path
+        self.h5_file = h5py.File(path, 'r')
         
         print(f"Dataset size: {len(self)}")
     
     def __len__(self):
         return len(self.pairs)
+    
+    def __del__(self):
+        self.h5_file.close()
 
     def __getitem__(self, idx):
         pair = self.pairs.iloc[idx]
@@ -39,13 +43,12 @@ class AuctionDataset(torch.utils.data.Dataset):
         hour = date_time_obj.hour
         weekday = date_time_obj.weekday()
         
-        with h5py.File(self.path, 'r') as f:
-            auctions = f[f'{date_folder_name}/{hour_folder_name}/{item_index}/auctions'][:]
-            contexts = f[f'{date_folder_name}/{hour_folder_name}/{item_index}/contexts'][:]
-            bonus_lists = f[f'{date_folder_name}/{hour_folder_name}/{item_index}/bonus_lists'][:]
-            modifier_types = f[f'{date_folder_name}/{hour_folder_name}/{item_index}/modifier_types'][:]
-            modifier_values = f[f'{date_folder_name}/{hour_folder_name}/{item_index}/modifier_values'][:]
-        
+        auctions = self.h5_file[f'{date_folder_name}/{hour_folder_name}/{item_index}/auctions'][:]
+        contexts = self.h5_file[f'{date_folder_name}/{hour_folder_name}/{item_index}/contexts'][:]
+        bonus_lists = self.h5_file[f'{date_folder_name}/{hour_folder_name}/{item_index}/bonus_lists'][:]
+        modifier_types = self.h5_file[f'{date_folder_name}/{hour_folder_name}/{item_index}/modifier_types'][:]
+        modifier_values = self.h5_file[f'{date_folder_name}/{hour_folder_name}/{item_index}/modifier_values'][:]
+    
         auctions = torch.tensor(auctions, dtype=torch.float32)
         item_index = torch.tensor(item_index, dtype=torch.int32).repeat(auctions.shape[0])
         contexts = torch.tensor(contexts, dtype=torch.int32)

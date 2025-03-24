@@ -48,22 +48,22 @@ def process_mappings(args):
                 modifier_types.update(mod['type'] for mod in item['modifiers'])
 
     # Padding: 0, Unknown: 1
-    item_to_index = {0: 0, 1: 1}
-    context_to_index = {0: 0, 1: 1}
-    bonus_id_to_index = {0: 0, 1: 1} 
-    modifier_type_to_index = {0: 0, 1: 1}
+    item_to_index = {"0": 0, "1": 1}
+    context_to_index = {"0": 0} # We use 0 for unknown too in the context
+    bonus_id_to_index = {"0": 0, "1": 1} 
+    modifier_type_to_index = {"0": 0, "1": 1}
 
     for idx, item_id in enumerate(sorted(item_ids), start=2):
-        item_to_index[item_id] = idx
-        
+        item_to_index[str(item_id)] = idx
+
     for idx, context in enumerate(sorted(contexts), start=2):
-        context_to_index[context] = idx
+        context_to_index[str(context)] = idx
         
     for idx, bonus_id in enumerate(sorted(bonus_ids), start=2):
-        bonus_id_to_index[bonus_id] = idx
+        bonus_id_to_index[str(bonus_id)] = idx
         
     for idx, mod_type in enumerate(sorted(modifier_types), start=2):
-        modifier_type_to_index[mod_type] = idx
+        modifier_type_to_index[str(mod_type)] = idx
 
     os.makedirs(args.output_dir, exist_ok=True)
 

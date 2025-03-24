@@ -16,8 +16,8 @@ time_left_to_int = {
 exclude_first_times = [
     '09-03-2025', # we should exclude items that appeared in the first two days
     '10-03-2025',
-    '20-03-2025', # we should exclude items that appeared in the last two days
-    '21-03-2025',
+    '21-03-2025', # we should exclude items that appeared in the last two days
+    '22-03-2025',
 ]
 
 def pad_sequence(sequences, padding_value=0):
@@ -120,7 +120,7 @@ def process_auctions(args):
             buyout = auction.get('buyout', 0) / 10000.0
             time_left = auction['time_left']
             quantity = auction['quantity']
-            context = context_to_idx[str(auction.get('context', 1))] # 1 is unknown
+            context = context_to_idx[str(auction['item'].get('context', 0))]
             bonus_lists = [bonus_to_idx[str(bonus)] for bonus in auction['item'].get('bonus_lists', [])]
             modifiers = auction['item'].get('modifiers', [])
 
@@ -144,7 +144,7 @@ def process_auctions(args):
                 bid,
                 buyout,
                 quantity,
-                time_left_to_int.get(time_left, 0),
+                time_left_to_int[time_left],
                 current_hours,
                 hours_on_sale,
                 context,
