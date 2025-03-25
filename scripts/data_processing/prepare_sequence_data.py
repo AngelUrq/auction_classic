@@ -203,6 +203,10 @@ def process_auctions(args):
                 modifier_types = pad_sequence([auction[8] for auction in all_auctions])
                 modifier_values = pad_sequence([auction[9] for auction in all_auctions])
 
+                #if item_index == 13815:
+                #    print(f"{group_path}/{dataset_name}/auctions")
+                #    print(auctions)
+
                 h5_file[group_path].create_dataset(f'{dataset_name}/auctions', data=auctions)
                 h5_file[group_path].create_dataset(f'{dataset_name}/contexts', data=contexts)
                 h5_file[group_path].create_dataset(f'{dataset_name}/bonus_lists', data=bonus_lists)

@@ -35,11 +35,13 @@ class AuctionDataset(torch.utils.data.Dataset):
         
         record = pair['record']
         item_index = pair['item_index']
+
+        #print(f'{record} {item_index}')
         
         date_time_obj = datetime.strptime(record, "%Y-%m-%d %H:%M:%S")
         date_folder_name = date_time_obj.strftime("%Y-%m-%d")
         hour_folder_name = date_time_obj.strftime("%H")
-        
+
         hour = date_time_obj.hour
         weekday = date_time_obj.weekday()
         
