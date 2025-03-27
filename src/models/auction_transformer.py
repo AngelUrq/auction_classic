@@ -49,7 +49,7 @@ class AuctionTransformer(L.LightningModule):
         )
         self.encoder = nn.TransformerEncoder(encoder_layer, num_layers=num_layers)
         
-        self.criterion = torch.nn.MSELoss(reduction='sum')
+        self.criterion = torch.nn.MSELoss(reduction='none')
         self.learning_rate = learning_rate
         self.logging_interval = logging_interval
         
@@ -58,11 +58,13 @@ class AuctionTransformer(L.LightningModule):
 
         item_embeddings = self.item_embeddings(item_index.long())
         context_embeddings = self.context_embeddings(contexts.long())
-        bonus_embeddings = self.bonus_embeddings(bonus_lists.long())
+        bonus_embeddings = self.bonus_embeddings(bonus_lists.long()) 
         modifier_embeddings = self.modifier_embeddings(modifier_types.long())
 
         item_mask = (item_index != 0).float().unsqueeze(-1)
         item_embeddings = item_embeddings * item_mask
+
+        auctions = auctions * item_mask
 
         context_mask = (contexts != 0).float().unsqueeze(-1)
         context_embeddings = context_embeddings * context_mask
@@ -75,10 +77,11 @@ class AuctionTransformer(L.LightningModule):
         modifier_embeddings = torch.sum(modifier_embeddings * modifier_mask, dim=-2) / (modifier_mask.sum(dim=-2) + 1e-6)
 
         combined_features = torch.cat([auctions, item_embeddings, context_embeddings, bonus_embeddings, modifier_embeddings], dim=-1)
-        
         X = self.input_projection(combined_features)
         
-        X = self.encoder(X)
+        attention_mask = (item_index == 0)
+        X = self.encoder(X, src_key_padding_mask=attention_mask)
+        
         X = self.output_projection(X)
         X = torch.sigmoid(X)
         
@@ -139,7 +142,7 @@ class AuctionTransformer(L.LightningModule):
             self._log_raw_batch_data(batch_idx, (auctions, item_index, contexts, bonus_lists, modifier_types, modifier_values, current_hours), y, mask, 'val')
 
         return mse_loss
-    
+
     def _log_step_predictions(self, batch_idx, y, y_hat, mask, step_type):
         """Log predictions for the current step to CSV files.
         

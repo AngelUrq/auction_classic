@@ -66,37 +66,39 @@ def predict_dataframe(model, df_auctions, prediction_time, feature_stats, lambda
             skipped_auctions += len(auctions)
             continue
             
-        # Extract features and normalize them
         auction_features = torch.stack([torch.tensor(a['features'], dtype=torch.float32) for a in auctions]).to(model.device)
-        
-        # Normalize features
         auction_features = (auction_features - feature_stats['means'].to(model.device)) / (feature_stats['stds'].to(model.device) + 1e-6)
         
-        # Prepare other inputs
         item_indices = torch.tensor([a['item_index'] for a in auctions], dtype=torch.int32).to(model.device)
         contexts = torch.tensor([a['context'] for a in auctions], dtype=torch.int32).to(model.device)
         
-        # Handle bonus lists
         bonus_lists = [torch.tensor(a['bonus_lists'], dtype=torch.int32) for a in auctions]
         bonus_lists = pad_tensors_to_max_size(bonus_lists).to(model.device)
         
-        # Handle modifier types
         modifier_types = [torch.tensor(a['modifier_types'], dtype=torch.int32) for a in auctions]
         modifier_types = pad_tensors_to_max_size(modifier_types).to(model.device)
         
-        # Handle modifier values
         modifier_values = [torch.tensor(a['modifier_values'], dtype=torch.float32) for a in auctions]
         modifier_values = pad_tensors_to_max_size(modifier_values).to(model.device)
         
-        # Normalize modifier values
         modifier_values = (modifier_values - feature_stats['modifiers_mean'].to(model.device)) / (feature_stats['modifiers_std'].to(model.device) + 1e-6)
-        
-        # Forward pass - add batch dimension
+    
         X = (auction_features.unsqueeze(0), item_indices.unsqueeze(0), 
              contexts.unsqueeze(0), bonus_lists.unsqueeze(0), 
              modifier_types.unsqueeze(0), modifier_values.unsqueeze(0))
-
+    
         y = model(X)
+
+        # write this to a file (X) (auctions, item_index, contexts, bonus_lists, modifier_types, modifier_values)
+        with open('X.txt', 'w') as f:
+            f.write(f'auctions: {auction_features.unsqueeze(0)}\n')
+            f.write(f'item_index: {item_indices.unsqueeze(0)}\n')
+            f.write(f'contexts: {contexts.unsqueeze(0)}\n')
+            f.write(f'bonus_lists: {bonus_lists.unsqueeze(0)}\n')
+            f.write(f'modifier_types: {modifier_types.unsqueeze(0)}\n')
+            f.write(f'modifier_values: {modifier_values.unsqueeze(0)}\n')    
+            f.write(f'current_hours: {current_hours}\n')
+            f.write(f'y_hat: {y[0]}\n')
         
         # Update the dataframe with predictions
         for i, auction in enumerate(auctions):
