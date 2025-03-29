@@ -93,12 +93,15 @@ class AuctionTransformer(L.LightningModule):
         y_hat = self((auctions, item_index, contexts, bonus_lists, modifier_types, modifier_values))
         
         mask = (item_index != 0).float().unsqueeze(-1)
-        current_hours_mask = (current_hours <= 12.0).float().unsqueeze(-1)
-        mask = mask * current_hours_mask
-        
-        mse_loss = self.criterion(y_hat * mask, y.unsqueeze(2) * mask) / mask.sum()
+
+        weights = torch.exp(-current_hours / 24.0).unsqueeze(-1)
+        mse = self.criterion(y_hat * mask, y.unsqueeze(2) * mask)
+        weighted_mse = mse * weights * mask
+        mse_loss = weighted_mse.sum() / (mask * weights).sum()
 
         with torch.no_grad():
+            current_hours_mask = (current_hours <= 12.0).float().unsqueeze(-1)
+            mask = mask * current_hours_mask
             mae_loss = torch.nn.functional.l1_loss(
                 y_hat * mask * 48.0, 
                 y.unsqueeze(2) * mask * 48.0, 
@@ -123,10 +126,14 @@ class AuctionTransformer(L.LightningModule):
         y_hat = self((auctions, item_index, contexts, bonus_lists, modifier_types, modifier_values))
         
         mask = (item_index != 0).float().unsqueeze(-1)
+
+        weights = torch.exp(-current_hours / 24.0).unsqueeze(-1)
+        mse = self.criterion(y_hat * mask, y.unsqueeze(2) * mask)
+        weighted_mse = mse * weights * mask
+        mse_loss = weighted_mse.sum() / (mask * weights).sum()
+
         current_hours_mask = (current_hours <= 12.0).float().unsqueeze(-1)
         mask = mask * current_hours_mask
-
-        mse_loss = self.criterion(y_hat * mask, y.unsqueeze(2) * mask) / mask.sum()
         mae_loss = torch.nn.functional.l1_loss(
             y_hat * mask * 48.0, 
             y.unsqueeze(2) * mask * 48.0, 
