@@ -1,6 +1,7 @@
 wandb
 pandas
 matplotlib
+lightning
 tqdm
 scikit-learn
 torch_tb_profiler

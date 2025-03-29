@@ -11,7 +11,7 @@ def predict_dataframe(model, df_auctions, prediction_time, feature_stats, lambda
 
     # Group auctions by item_index
     auctions_by_item = {}
-    for group_item_index in tqdm(df_auctions['item_index'].unique()):
+    for group_item_index in df_auctions['item_index'].unique():
         auctions_by_item[group_item_index] = []
         df_auctions_group = df_auctions[df_auctions['item_index'] == group_item_index]
 
@@ -58,7 +58,7 @@ def predict_dataframe(model, df_auctions, prediction_time, feature_stats, lambda
     skipped_auctions = 0
 
     # Process each group of auctions
-    for group_item_index in tqdm(list(auctions_by_item.keys())):
+    for group_item_index in list(auctions_by_item.keys()):
         auctions = auctions_by_item[group_item_index]
         
         if len(auctions) > 32:
@@ -88,17 +88,6 @@ def predict_dataframe(model, df_auctions, prediction_time, feature_stats, lambda
              modifier_types.unsqueeze(0), modifier_values.unsqueeze(0))
     
         y = model(X)
-
-        # write this to a file (X) (auctions, item_index, contexts, bonus_lists, modifier_types, modifier_values)
-        with open('X.txt', 'w') as f:
-            f.write(f'auctions: {auction_features.unsqueeze(0)}\n')
-            f.write(f'item_index: {item_indices.unsqueeze(0)}\n')
-            f.write(f'contexts: {contexts.unsqueeze(0)}\n')
-            f.write(f'bonus_lists: {bonus_lists.unsqueeze(0)}\n')
-            f.write(f'modifier_types: {modifier_types.unsqueeze(0)}\n')
-            f.write(f'modifier_values: {modifier_values.unsqueeze(0)}\n')    
-            f.write(f'current_hours: {current_hours}\n')
-            f.write(f'y_hat: {y[0]}\n')
         
         # Update the dataframe with predictions
         for i, auction in enumerate(auctions):
@@ -107,7 +96,6 @@ def predict_dataframe(model, df_auctions, prediction_time, feature_stats, lambda
             df_auctions.loc[df_auctions['id'] == auction_id, 'prediction'] = round(prediction_value, 2)
             df_auctions.loc[df_auctions['id'] == auction_id, 'sale_probability'] = np.exp(-lambda_value * prediction_value)
 
-    print(f'Skipped {skipped_auctions} auctions from {len(auctions_by_item)} item indices')
     df_auctions = df_auctions[~df_auctions['item_index'].isin(skipped_item_indices)]
 
     return df_auctions

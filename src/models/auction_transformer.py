@@ -49,7 +49,7 @@ class AuctionTransformer(L.LightningModule):
         )
         self.encoder = nn.TransformerEncoder(encoder_layer, num_layers=num_layers)
         
-        self.criterion = torch.nn.MSELoss(reduction='none')
+        self.criterion = torch.nn.MSELoss(reduction='sum')
         self.learning_rate = learning_rate
         self.logging_interval = logging_interval
         
