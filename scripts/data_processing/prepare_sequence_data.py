@@ -16,8 +16,12 @@ time_left_to_int = {
 exclude_first_times = [
     '09-03-2025', # we should exclude items that appeared in the first two days
     '10-03-2025',
-    '21-03-2025', # we should exclude items that appeared in the last two days
-    '22-03-2025',
+    '22-03-2025', # we should exclude items that appeared in the last two days
+    '23-03-2025',
+    '25-03-2025', 
+    '26-03-2025',
+    '29-03-2025',
+    '30-03-2025',
 ]
 
 def pad_sequence(sequences, padding_value=0):
