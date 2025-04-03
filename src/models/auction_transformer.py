@@ -88,13 +88,14 @@ class AuctionTransformer(L.LightningModule):
         return X
 
     def training_step(self, batch, batch_idx):
-        (auctions, item_index, contexts, bonus_lists, modifier_types, modifier_values, current_hours), y = batch
+        (auctions, item_index, contexts, bonus_lists, modifier_types, modifier_values, current_hours, time_left), y = batch
 
         y_hat = self((auctions, item_index, contexts, bonus_lists, modifier_types, modifier_values))
         
         mask = (item_index != 0).float().unsqueeze(-1)
+        mask = mask * (time_left == 48.0)
 
-        weights = torch.exp(-current_hours / 24.0).unsqueeze(-1)
+        weights = torch.exp(-current_hours / 12.0).unsqueeze(-1)
         mse = self.criterion(y_hat * mask, y.unsqueeze(2) * mask)
         weighted_mse = mse * weights * mask
         mse_loss = weighted_mse.sum() / (mask * weights).sum()

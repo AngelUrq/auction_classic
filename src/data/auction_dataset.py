@@ -35,8 +35,6 @@ class AuctionDataset(torch.utils.data.Dataset):
         
         record = pair['record']
         item_index = pair['item_index']
-
-        #print(f'{record} {item_index}')
         
         date_time_obj = datetime.strptime(record, "%Y-%m-%d %H:%M:%S")
         date_folder_name = date_time_obj.strftime("%Y-%m-%d")
@@ -76,6 +74,7 @@ class AuctionDataset(torch.utils.data.Dataset):
         auctions[:, self.column_map['weekday']] = np.sin(2 * np.pi * weekday / 7)
 
         current_hours = auctions[:, self.column_map['current_hours']]
+        time_left = auctions[:, self.column_map['time_left']]
 
         if self.feature_stats:
             # Normalize auction features
@@ -92,5 +91,5 @@ class AuctionDataset(torch.utils.data.Dataset):
             
         y = hours_on_sale / 48.0
         
-        return (auctions, item_index, contexts, bonus_lists, modifier_types, modifier_values, current_hours), y
+        return (auctions, item_index, contexts, bonus_lists, modifier_types, modifier_values, current_hours, time_left), y
         

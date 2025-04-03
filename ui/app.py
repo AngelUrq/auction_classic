@@ -73,7 +73,7 @@ def load_data_and_model():
     feature_stats = torch.load(os.path.join(base_path, 'generated/feature_stats.pt'))
 
     model = AuctionTransformer.load_from_checkpoint(
-        os.path.join(base_path, 'models/auction_transformer_7.2M_128b_wpos_ch_filtered/last-v1.ckpt'),
+        os.path.join(base_path, 'models/auction_transformer_40M/last.ckpt'),
         map_location=device
     )
 
@@ -144,6 +144,7 @@ def generate_recommendations(expected_profit, min_sale_probability):
                 'bonus_lists': modified_auction_prediction['bonus_lists'],
                 'modifier_types': modified_auction_prediction['modifier_types'], 
                 'modifier_values': modified_auction_prediction['modifier_values'],
+                'prediction': modified_auction_prediction['prediction'],
                 'sale_probability': modified_auction_prediction['sale_probability'],
                 'original_price': lowest_auction['buyout'],
                 'new_price': lowest_auction['buyout'] + expected_profit
