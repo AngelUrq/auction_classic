@@ -20,8 +20,8 @@ exclude_first_times = [
     '23-03-2025',
     '25-03-2025', 
     '26-03-2025',
-    '29-03-2025',
-    '30-03-2025',
+    '03-04-2025',
+    '04-04-2025',
 ]
 
 def pad_sequence(sequences, padding_value=0):
@@ -206,16 +206,21 @@ def process_auctions(args):
                 bonus_lists = pad_sequence([auction[7] for auction in all_auctions])
                 modifier_types = pad_sequence([auction[8] for auction in all_auctions])
                 modifier_values = pad_sequence([auction[9] for auction in all_auctions])
-
-                #if item_index == 13815:
-                #    print(f"{group_path}/{dataset_name}/auctions")
-                #    print(auctions)
-
+                
+                buyout_prices = auctions[:, 1] 
+                
+                buyout_for_ranking = np.copy(buyout_prices)
+                buyout_for_ranking[buyout_for_ranking == 0] = np.inf
+            
+                buyout_ranking = np.argsort(np.argsort(buyout_for_ranking)) + 1
+                buyout_ranking[buyout_prices == 0] = 0
+                
                 h5_file[group_path].create_dataset(f'{dataset_name}/auctions', data=auctions)
                 h5_file[group_path].create_dataset(f'{dataset_name}/contexts', data=contexts)
                 h5_file[group_path].create_dataset(f'{dataset_name}/bonus_lists', data=bonus_lists)
                 h5_file[group_path].create_dataset(f'{dataset_name}/modifier_types', data=modifier_types)
                 h5_file[group_path].create_dataset(f'{dataset_name}/modifier_values', data=modifier_values)
+                h5_file[group_path].create_dataset(f'{dataset_name}/buyout_ranking', data=buyout_ranking)
 
         with open(os.path.join(args.output_dir, 'auction_indices.csv'), 'a', newline='') as f:
             writer = csv.writer(f)

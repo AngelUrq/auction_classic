@@ -21,14 +21,15 @@ class AuctionTransformer(L.LightningModule):
         nhead: int = 4,
         num_layers: int = 4,
         dropout_p: float = 0.1,
-        learning_rate: float = 3e-5,
-        logging_interval: int = 1000
+        learning_rate: float = 1e-4,
+        logging_interval: int = 1000,
+        max_position: int = 64
     ):
         super().__init__()
 
         self.save_hyperparameters()
 
-        self.input_projection = nn.Linear(input_size + 4 * embedding_dim, d_model)
+        self.input_projection = nn.Linear(input_size + 5 * embedding_dim, d_model)
         self.output_projection = nn.Sequential(
             nn.Linear(d_model, d_model * 4),
             nn.ReLU(),
@@ -39,6 +40,7 @@ class AuctionTransformer(L.LightningModule):
         self.context_embeddings = nn.Embedding(n_contexts, embedding_dim)
         self.bonus_embeddings = nn.Embedding(n_bonuses, embedding_dim)
         self.modifier_embeddings = nn.Embedding(n_modtypes, embedding_dim)
+        self.position_embeddings = nn.Embedding(max_position + 1, embedding_dim)
         
         encoder_layer = nn.TransformerEncoderLayer(
             d_model=d_model,
@@ -54,12 +56,13 @@ class AuctionTransformer(L.LightningModule):
         self.logging_interval = logging_interval
         
     def forward(self, X):
-        (auctions, item_index, contexts, bonus_lists, modifier_types, modifier_values) = X
+        (auctions, item_index, contexts, bonus_lists, modifier_types, modifier_values, current_hours, time_left, buyout_ranking) = X
 
         item_embeddings = self.item_embeddings(item_index.long())
         context_embeddings = self.context_embeddings(contexts.long())
         bonus_embeddings = self.bonus_embeddings(bonus_lists.long()) 
         modifier_embeddings = self.modifier_embeddings(modifier_types.long())
+        position_embeddings = self.position_embeddings(buyout_ranking.long())
 
         item_mask = (item_index != 0).float().unsqueeze(-1)
         item_embeddings = item_embeddings * item_mask
@@ -76,7 +79,20 @@ class AuctionTransformer(L.LightningModule):
         modifier_embeddings = modifier_values.unsqueeze(-1) * modifier_embeddings
         modifier_embeddings = torch.sum(modifier_embeddings * modifier_mask, dim=-2) / (modifier_mask.sum(dim=-2) + 1e-6)
 
-        combined_features = torch.cat([auctions, item_embeddings, context_embeddings, bonus_embeddings, modifier_embeddings], dim=-1)
+        # Apply mask to position embeddings
+        position_mask = (buyout_ranking != 0).float().unsqueeze(-1)
+        position_embeddings = position_embeddings * position_mask
+
+        # Include position embeddings in the concatenation
+        combined_features = torch.cat([
+            auctions, 
+            item_embeddings, 
+            context_embeddings, 
+            bonus_embeddings, 
+            modifier_embeddings,
+            position_embeddings
+        ], dim=-1)
+        
         X = self.input_projection(combined_features)
         
         attention_mask = (item_index == 0)
@@ -88,9 +104,9 @@ class AuctionTransformer(L.LightningModule):
         return X
 
     def training_step(self, batch, batch_idx):
-        (auctions, item_index, contexts, bonus_lists, modifier_types, modifier_values, current_hours, time_left), y = batch
+        (auctions, item_index, contexts, bonus_lists, modifier_types, modifier_values, current_hours, time_left, buyout_ranking), y = batch
 
-        y_hat = self((auctions, item_index, contexts, bonus_lists, modifier_types, modifier_values))
+        y_hat = self((auctions, item_index, contexts, bonus_lists, modifier_types, modifier_values, current_hours, time_left, buyout_ranking))
         
         mask = (item_index != 0).float().unsqueeze(-1)
         mask = mask * (time_left == 48.0).float().unsqueeze(-1)
@@ -117,14 +133,14 @@ class AuctionTransformer(L.LightningModule):
             self._log_step_predictions(batch_idx, y, y_hat, mask, 'train')
 
         if self.global_step == 0:
-            self._log_raw_batch_data(batch_idx, (auctions, item_index, contexts, bonus_lists, modifier_types, modifier_values, current_hours), y, mask, 'train')
+            self._log_raw_batch_data(batch_idx, (auctions, item_index, contexts, bonus_lists, modifier_types, modifier_values, current_hours, time_left, buyout_ranking), y, mask, 'train')
         
         return mse_loss
 
     def validation_step(self, batch, batch_idx):
-        (auctions, item_index, contexts, bonus_lists, modifier_types, modifier_values, current_hours, time_left), y = batch
+        (auctions, item_index, contexts, bonus_lists, modifier_types, modifier_values, current_hours, time_left, buyout_ranking), y = batch
 
-        y_hat = self((auctions, item_index, contexts, bonus_lists, modifier_types, modifier_values))
+        y_hat = self((auctions, item_index, contexts, bonus_lists, modifier_types, modifier_values, current_hours, time_left, buyout_ranking))
         
         mask = (item_index != 0).float().unsqueeze(-1)
         mask = mask * (time_left == 48.0).float().unsqueeze(-1)
@@ -148,7 +164,7 @@ class AuctionTransformer(L.LightningModule):
         self._log_step_predictions(batch_idx, y, y_hat, mask, 'val')
 
         if self.global_step == 0:
-            self._log_raw_batch_data(batch_idx, (auctions, item_index, contexts, bonus_lists, modifier_types, modifier_values, current_hours), y, mask, 'val')
+            self._log_raw_batch_data(batch_idx, (auctions, item_index, contexts, bonus_lists, modifier_types, modifier_values, current_hours, time_left, buyout_ranking), y, mask, 'val')
 
         return mse_loss
 
@@ -192,7 +208,7 @@ class AuctionTransformer(L.LightningModule):
         batch_dir = Path(f"logs/{step_type}/raw_batch_data")
         batch_dir.mkdir(parents=True, exist_ok=True)
         
-        (auctions, item_index, contexts, bonus_lists, modifier_types, modifier_values, current_hours) = x
+        (auctions, item_index, contexts, bonus_lists, modifier_types, modifier_values, current_hours, time_left, buyout_ranking) = x
         targets = y.detach().cpu() * 48.0
         mask = mask.detach().cpu()
         batch_size, seq_length, n_features = auctions.shape
@@ -208,27 +224,26 @@ class AuctionTransformer(L.LightningModule):
             
             df_sequence['target'] = sequence_target
             df_sequence['is_valid'] = [mask[batch_item, i] for i in range(seq_length)]
+            df_sequence['buyout_ranking'] = buyout_ranking[batch_item].detach().cpu().numpy()
             
             sequence_file = batch_dir / f"raw_batch_{batch_idx}_sequence_{batch_item}.csv"
             df_sequence.to_csv(sequence_file, index=False)
 
     def configure_optimizers(self):
         optimizer = torch.optim.AdamW(self.parameters(), lr=self.learning_rate)
-        scheduler = ReduceLROnPlateau(
-            optimizer,
-            mode='min',
-            factor=0.1,
-            patience=10000,
-            verbose=True,
-            min_lr=1e-8
-        )
         
-        return {
-            "optimizer": optimizer,
-            "lr_scheduler": {
-                "scheduler": scheduler,
-                "monitor": "train/mse_loss",
-                "interval": "step",
-                "frequency": 1
-            },
-        }   
+        scheduler = {
+            "scheduler": torch.optim.lr_scheduler.OneCycleLR(
+                optimizer,
+                max_lr=self.learning_rate,
+                total_steps=self.trainer.estimated_stepping_batches,
+                pct_start=0.15,
+                div_factor=25,
+                final_div_factor=100,
+                anneal_strategy="cos"
+            ),
+            "interval": "step",
+            "frequency": 1
+        }
+        
+        return {"optimizer": optimizer, "lr_scheduler": scheduler}

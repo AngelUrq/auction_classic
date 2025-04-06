@@ -48,6 +48,7 @@ class AuctionDataset(torch.utils.data.Dataset):
         bonus_lists = self.h5_file[f'{date_folder_name}/{hour_folder_name}/{item_index}/bonus_lists'][:]
         modifier_types = self.h5_file[f'{date_folder_name}/{hour_folder_name}/{item_index}/modifier_types'][:]
         modifier_values = self.h5_file[f'{date_folder_name}/{hour_folder_name}/{item_index}/modifier_values'][:]
+        buyout_ranking = self.h5_file[f'{date_folder_name}/{hour_folder_name}/{item_index}/buyout_ranking'][:]
     
         auctions = torch.tensor(auctions, dtype=torch.float32)
         item_index = torch.tensor(item_index, dtype=torch.int32).repeat(auctions.shape[0])
@@ -55,6 +56,7 @@ class AuctionDataset(torch.utils.data.Dataset):
         bonus_lists = torch.tensor(bonus_lists, dtype=torch.int32)
         modifier_types = torch.tensor(modifier_types, dtype=torch.int32)
         modifier_values = torch.tensor(modifier_values, dtype=torch.float32)
+        buyout_ranking = torch.tensor(buyout_ranking, dtype=torch.int32)
 
         hours_on_sale = auctions[:, -1]
         auctions = auctions[:, :-1]
@@ -91,5 +93,5 @@ class AuctionDataset(torch.utils.data.Dataset):
             
         y = hours_on_sale / 48.0
         
-        return (auctions, item_index, contexts, bonus_lists, modifier_types, modifier_values, current_hours, time_left), y
+        return (auctions, item_index, contexts, bonus_lists, modifier_types, modifier_values, current_hours, time_left, buyout_ranking), y
         
