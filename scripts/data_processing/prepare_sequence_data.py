@@ -212,8 +212,11 @@ def process_auctions(args):
                 buyout_for_ranking = np.copy(buyout_prices)
                 buyout_for_ranking[buyout_for_ranking == 0] = np.inf
             
-                buyout_ranking = np.argsort(np.argsort(buyout_for_ranking)) + 1
-                buyout_ranking[buyout_prices == 0] = 0
+                unique_buyouts = np.unique(buyout_for_ranking[buyout_for_ranking != np.inf])
+                buyout_ranking = np.zeros_like(buyout_prices, dtype=int)
+                
+                for i, price in enumerate(unique_buyouts, 1):
+                    buyout_ranking[buyout_for_ranking == price] = i
                 
                 h5_file[group_path].create_dataset(f'{dataset_name}/auctions', data=auctions)
                 h5_file[group_path].create_dataset(f'{dataset_name}/contexts', data=contexts)
