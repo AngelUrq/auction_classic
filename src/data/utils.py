@@ -108,7 +108,7 @@ def get_current_auctions(config):
     
     return data
 
-def load_auctions_from_sample(data_dir, prediction_time, time_left_mapping, item_to_idx, context_to_idx, bonus_to_idx, modtype_to_idx, last_48_hours=False):
+def load_auctions_from_sample(data_dir, prediction_time, time_left_mapping, item_to_idx, context_to_idx, bonus_to_idx, modtype_to_idx, last_days=None):
     file_info = {}
     auction_appearances = {}
 
@@ -116,10 +116,9 @@ def load_auctions_from_sample(data_dir, prediction_time, time_left_mapping, item
         for filename in tqdm(files):
             filepath = os.path.join(root, filename)
             date = datetime.strptime(filename.split('.')[0], '%Y%m%dT%H')
-            
-            # Skip files older than 48 hours before prediction time if last_48_hours is True
-            if last_48_hours and prediction_time is not None:
-                if date < prediction_time - timedelta(hours=48):
+
+            if last_days and prediction_time is not None:
+                if date < prediction_time - timedelta(days=last_days):
                     continue
                     
             file_info[filepath] = date
@@ -164,47 +163,51 @@ def load_auctions_from_sample(data_dir, prediction_time, time_left_mapping, item
 
     auctions = []
     for auction in tqdm(raw_auctions):
-        first_appearance = auction_appearances[auction['id']]['first']
-        last_appearance = auction_appearances[auction['id']]['last']
+        try: 
+            first_appearance = auction_appearances[auction['id']]['first']
+            last_appearance = auction_appearances[auction['id']]['last']
 
-        auction_id = auction['id']
-        item_id = auction['item']['id']
-        item_index = item_to_idx.get(str(item_id), 1)
-        bid = auction.get('bid', 0) / 10000.0
-        buyout = auction['buyout'] / 10000.0
-        quantity = auction['quantity']
-        time_left = time_left_mapping[auction['time_left']]
-        context = context_to_idx[str(auction['item'].get('context', 0))]
-        bonus_lists = [bonus_to_idx.get(str(bonus), 1) for bonus in auction['item'].get('bonus_lists', [])]
-        modifiers = auction['item'].get('modifiers', [])
+            auction_id = auction['id']
+            item_id = auction['item']['id']
+            item_index = item_to_idx.get(str(item_id), 1)
+            bid = auction.get('bid', 0) / 10000.0
+            buyout = auction['buyout'] / 10000.0
+            quantity = auction['quantity']
+            time_left = time_left_mapping[auction['time_left']]
+            context = context_to_idx[str(auction['item'].get('context', 0))]
+            bonus_lists = [bonus_to_idx.get(str(bonus), 1) for bonus in auction['item'].get('bonus_lists', [])]
+            modifiers = auction['item'].get('modifiers', [])
 
-        modifier_types = []
-        modifier_values = []
+            modifier_types = []
+            modifier_values = []
 
-        for modifier in modifiers:
-            modifier_types.append(modtype_to_idx[str(modifier['type'])])
-            modifier_values.append(modifier['value'])
+            for modifier in modifiers:
+                modifier_types.append(modtype_to_idx[str(modifier['type'])])
+                modifier_values.append(modifier['value'])
 
-        if 'pet_species_id' in auction['item']:
+            if 'pet_species_id' in auction['item']:
+                continue
+
+            first_appearance = first_appearance.strftime('%Y-%m-%d %H:%M:%S')
+            last_appearance = last_appearance.strftime('%Y-%m-%d %H:%M:%S')
+
+            auctions.append([
+                auction_id,
+                item_index,
+                bid,
+                buyout,
+                quantity,
+                time_left,
+                context,
+                bonus_lists,
+                    modifier_types,
+                    modifier_values,
+                    first_appearance,
+                    last_appearance
+                ])
+        except Exception as e:
+            print(f"Unexpected error processing auction {auction['id']}: {e}")
             continue
-
-        first_appearance = first_appearance.strftime('%Y-%m-%d %H:%M:%S')
-        last_appearance = last_appearance.strftime('%Y-%m-%d %H:%M:%S')
-
-        auctions.append([
-            auction_id,
-            item_index,
-            bid,
-            buyout,
-            quantity,
-            time_left,
-            context,
-            bonus_lists,
-            modifier_types,
-            modifier_values,
-            first_appearance,
-            last_appearance
-        ])
         
     df_auctions = pd.DataFrame(auctions, columns=['id', 'item_index', 'bid', 'buyout', 'quantity', 'time_left', 'context', 'bonus_lists', 'modifier_types', 'modifier_values', 'first_appearance', 'last_appearance'])
     df_auctions['first_appearance'] = pd.to_datetime(df_auctions['first_appearance'])

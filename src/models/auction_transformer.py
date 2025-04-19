@@ -51,12 +51,12 @@ class AuctionTransformer(L.LightningModule):
         )
         self.encoder = nn.TransformerEncoder(encoder_layer, num_layers=num_layers)
         
-        self.criterion = torch.nn.MSELoss(reduction='sum')
+        self.criterion = torch.nn.MSELoss(reduction='none')
         self.learning_rate = learning_rate
         self.logging_interval = logging_interval
         
     def forward(self, X):
-        (auctions, item_index, contexts, bonus_lists, modifier_types, modifier_values, current_hours, time_left, buyout_ranking) = X
+        (auctions, item_index, contexts, bonus_lists, modifier_types, modifier_values, buyout_ranking) = X
 
         item_embeddings = self.item_embeddings(item_index.long())
         context_embeddings = self.context_embeddings(contexts.long())
@@ -79,11 +79,9 @@ class AuctionTransformer(L.LightningModule):
         modifier_embeddings = modifier_values.unsqueeze(-1) * modifier_embeddings
         modifier_embeddings = torch.sum(modifier_embeddings * modifier_mask, dim=-2) / (modifier_mask.sum(dim=-2) + 1e-6)
 
-        # Apply mask to position embeddings
         position_mask = (buyout_ranking != 0).float().unsqueeze(-1)
         position_embeddings = position_embeddings * position_mask
 
-        # Include position embeddings in the concatenation
         combined_features = torch.cat([
             auctions, 
             item_embeddings, 
@@ -106,27 +104,43 @@ class AuctionTransformer(L.LightningModule):
     def training_step(self, batch, batch_idx):
         (auctions, item_index, contexts, bonus_lists, modifier_types, modifier_values, current_hours, time_left, buyout_ranking), y = batch
 
-        y_hat = self((auctions, item_index, contexts, bonus_lists, modifier_types, modifier_values, current_hours, time_left, buyout_ranking))
+        y_hat = self((auctions, item_index, contexts, bonus_lists, modifier_types, modifier_values, buyout_ranking))
         
         mask = (item_index != 0).float().unsqueeze(-1)
-        mask = mask * (time_left == 48.0).float().unsqueeze(-1)
 
-        weights = torch.exp(-current_hours / 12.0).unsqueeze(-1)
-        mse = self.criterion(y_hat * mask, y.unsqueeze(2) * mask)
-        weighted_mse = mse * weights * mask
-        mse_loss = weighted_mse.sum() / (mask * weights).sum()
+        errors = self.criterion(y_hat, y.unsqueeze(2))  
+        weights = torch.exp(-current_hours / 24.0).unsqueeze(-1)
+        weighted_errors = errors * mask * weights
+        mse_loss = weighted_errors.sum() / (mask * weights).sum()
 
         with torch.no_grad():
-            current_hours_mask = (current_hours <= 12.0).float().unsqueeze(-1)
-            mask = mask * current_hours_mask
-            mae_loss = torch.nn.functional.l1_loss(
+            # Calculate MAE for all valid items
+            general_mae = torch.nn.functional.l1_loss(
                 y_hat * mask * 48.0, 
                 y.unsqueeze(2) * mask * 48.0, 
                 reduction='sum'
             ) / mask.sum()
+            
+            # Calculate MAE for recent listings with full duration
+            specific_mask = mask * (current_hours <= 12.0).float().unsqueeze(-1) * (time_left == 48.0).float().unsqueeze(-1)
+            specific_mae = torch.nn.functional.l1_loss(
+                y_hat * specific_mask * 48.0, 
+                y.unsqueeze(2) * specific_mask * 48.0, 
+                reduction='sum'
+            ) / (specific_mask.sum() + 1e-6)
+            
+            # Calculate MAE for brand new listings (current_hours = 0)
+            new_listings_mask = mask * (current_hours == 0.0).float().unsqueeze(-1)
+            new_listings_mae = torch.nn.functional.l1_loss(
+                y_hat * new_listings_mask * 48.0, 
+                y.unsqueeze(2) * new_listings_mask * 48.0, 
+                reduction='sum'
+            ) / (new_listings_mask.sum() + 1e-6)
         
         self.log('train/mse_loss', mse_loss, on_step=True, on_epoch=True, prog_bar=True, batch_size=1)
-        self.log('train/mae_loss', mae_loss, on_step=True, on_epoch=True, prog_bar=True, batch_size=1)
+        self.log('train/general_mae', general_mae, on_step=True, on_epoch=True, prog_bar=True, batch_size=1)
+        self.log('train/specific_mae', specific_mae, on_step=True, on_epoch=True, prog_bar=True, batch_size=1)
+        self.log('train/new_listings_mae', new_listings_mae, on_step=True, on_epoch=True, prog_bar=True, batch_size=1)
         self.log('train/lr', self.optimizers().param_groups[0]['lr'], on_step=True, on_epoch=True)
         
         if self.global_step % self.logging_interval == 0:
@@ -140,26 +154,43 @@ class AuctionTransformer(L.LightningModule):
     def validation_step(self, batch, batch_idx):
         (auctions, item_index, contexts, bonus_lists, modifier_types, modifier_values, current_hours, time_left, buyout_ranking), y = batch
 
-        y_hat = self((auctions, item_index, contexts, bonus_lists, modifier_types, modifier_values, current_hours, time_left, buyout_ranking))
+        y_hat = self((auctions, item_index, contexts, bonus_lists, modifier_types, modifier_values, buyout_ranking))
         
+        # Only mask padding items, removing the time_left == 48.0 restriction
         mask = (item_index != 0).float().unsqueeze(-1)
-        mask = mask * (time_left == 48.0).float().unsqueeze(-1)
 
-        weights = torch.exp(-current_hours / 12.0).unsqueeze(-1)
+        weights = torch.exp(-current_hours / 24.0).unsqueeze(-1)
         mse = self.criterion(y_hat * mask, y.unsqueeze(2) * mask)
         weighted_mse = mse * weights * mask
         mse_loss = weighted_mse.sum() / (mask * weights).sum()
 
-        current_hours_mask = (current_hours <= 12.0).float().unsqueeze(-1)
-        mask = mask * current_hours_mask
-        mae_loss = torch.nn.functional.l1_loss(
+        # Calculate MAE for all valid items
+        general_mae = torch.nn.functional.l1_loss(
             y_hat * mask * 48.0, 
             y.unsqueeze(2) * mask * 48.0, 
             reduction='sum'
         ) / mask.sum()
         
+        # Calculate MAE for recent listings with full duration
+        specific_mask = mask * (current_hours <= 12.0).float().unsqueeze(-1) * (time_left == 48.0).float().unsqueeze(-1)
+        specific_mae = torch.nn.functional.l1_loss(
+            y_hat * specific_mask * 48.0, 
+            y.unsqueeze(2) * specific_mask * 48.0, 
+            reduction='sum'
+        ) / (specific_mask.sum() + 1e-6)
+        
+        # Calculate MAE for brand new listings (current_hours = 0)
+        new_listings_mask = mask * (current_hours == 0.0).float().unsqueeze(-1)
+        new_listings_mae = torch.nn.functional.l1_loss(
+            y_hat * new_listings_mask * 48.0, 
+            y.unsqueeze(2) * new_listings_mask * 48.0, 
+            reduction='sum'
+        ) / (new_listings_mask.sum() + 1e-6)
+        
         self.log('val/mse_loss', mse_loss, on_step=True, on_epoch=True, prog_bar=True, batch_size=1)
-        self.log('val/mae_loss', mae_loss, on_step=True, on_epoch=True, prog_bar=True, batch_size=1)
+        self.log('val/general_mae', general_mae, on_step=True, on_epoch=True, prog_bar=True, batch_size=1)
+        self.log('val/specific_mae', specific_mae, on_step=True, on_epoch=True, prog_bar=True, batch_size=1)
+        self.log('val/new_listings_mae', new_listings_mae, on_step=True, on_epoch=True, prog_bar=True, batch_size=1)
 
         self._log_step_predictions(batch_idx, y, y_hat, mask, 'val')
 

@@ -45,7 +45,8 @@ def predict_dataframe(model, df_auctions, prediction_time, feature_stats, lambda
                 'context': auction['context'],
                 'bonus_lists': auction['bonus_lists'],
                 'modifier_types': auction['modifier_types'],
-                'modifier_values': modifier_values
+                'modifier_values': modifier_values,
+                'current_hours': current_hours
             }
             
             auctions_by_item[group_item_index].append(processed_auction)
@@ -61,7 +62,7 @@ def predict_dataframe(model, df_auctions, prediction_time, feature_stats, lambda
     for group_item_index in list(auctions_by_item.keys()):
         auctions = auctions_by_item[group_item_index]
         
-        if len(auctions) > 32:
+        if len(auctions) > 64:
             skipped_item_indices.append(group_item_index)
             skipped_auctions += len(auctions)
             continue
@@ -82,19 +83,34 @@ def predict_dataframe(model, df_auctions, prediction_time, feature_stats, lambda
         modifier_values = pad_tensors_to_max_size(modifier_values).to(model.device)
         
         modifier_values = (modifier_values - feature_stats['modifiers_mean'].to(model.device)) / (feature_stats['modifiers_std'].to(model.device) + 1e-6)
+
+        # Calculate buyout ranking
+        buyout_prices = auction_features[:, 1].cpu().numpy()  # Extract buyout prices
+        buyout_for_ranking = np.copy(buyout_prices)
+        buyout_for_ranking[buyout_for_ranking == 0] = np.inf
+        
+        unique_buyouts = np.unique(buyout_for_ranking[buyout_for_ranking != np.inf])
+        buyout_ranking = np.zeros_like(buyout_prices, dtype=int)
+        
+        for i, price in enumerate(unique_buyouts, 1):
+            buyout_ranking[buyout_for_ranking == price] = i
+            
+        buyout_ranking = torch.tensor(buyout_ranking, dtype=torch.int32).to(model.device)
     
         X = (auction_features.unsqueeze(0), item_indices.unsqueeze(0), 
              contexts.unsqueeze(0), bonus_lists.unsqueeze(0), 
-             modifier_types.unsqueeze(0), modifier_values.unsqueeze(0))
+             modifier_types.unsqueeze(0), modifier_values.unsqueeze(0),
+             buyout_ranking.unsqueeze(0))
     
         y = model(X)
         
-        # Update the dataframe with predictions
         for i, auction in enumerate(auctions):
             auction_id = auction['id']
-            prediction_value = y[0, i, 0].item() * 48.0  # Scale back from normalized value
+            prediction_value = y[0, i, 0].item() * 48.0
+            prediction_difference = prediction_value + auction['current_hours'] 
+
             df_auctions.loc[df_auctions['id'] == auction_id, 'prediction'] = round(prediction_value, 2)
-            df_auctions.loc[df_auctions['id'] == auction_id, 'sale_probability'] = np.exp(-lambda_value * prediction_value)
+            df_auctions.loc[df_auctions['id'] == auction_id, 'sale_probability'] = np.exp(-lambda_value * prediction_difference)
 
     df_auctions = df_auctions[~df_auctions['item_index'].isin(skipped_item_indices)]
 

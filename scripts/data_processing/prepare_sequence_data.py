@@ -18,10 +18,12 @@ exclude_first_times = [
     '10-03-2025',
     '22-03-2025', # we should exclude items that appeared in the last two days
     '23-03-2025',
+    '24-03-2025',
     '25-03-2025', 
     '26-03-2025',
-    '03-04-2025',
-    '04-04-2025',
+    '16-04-2025',
+    '17-04-2025',
+    '18-04-2025',
 ]
 
 def pad_sequence(sequences, padding_value=0):
