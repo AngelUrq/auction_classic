@@ -180,7 +180,7 @@ class AuctionTransformer(L.LightningModule):
         ) / (specific_mask.sum() + 1e-6)
         
         # Calculate MAE for brand new listings (current_hours = 0)
-        new_listings_mask = mask * (current_hours == 0.0).float().unsqueeze(-1)
+        new_listings_mask = mask  * (current_hours == 0.0).float().unsqueeze(-1)
         new_listings_mae = torch.nn.functional.l1_loss(
             y_hat * new_listings_mask * 48.0, 
             y.unsqueeze(2) * new_listings_mask * 48.0, 

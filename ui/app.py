@@ -74,7 +74,7 @@ def load_data_and_model():
     feature_stats = torch.load(os.path.join(base_path, 'generated/feature_stats.pt'))
 
     model = AuctionTransformer.load_from_checkpoint(
-        os.path.join(base_path, 'models/auction_transformer_40M/last-v1.ckpt'),
+        os.path.join(base_path, 'models/auction_transformer_40M_39GB/last.ckpt'),
         map_location=device
     )
 
@@ -90,7 +90,7 @@ def load_data_and_model():
         context_to_idx, 
         bonus_to_idx, 
         modtype_to_idx, 
-        last_days=14
+        last_days=7
     )
     df_auctions['item_id'] = df_auctions['item_index'].map(idx_to_item)
 
@@ -193,7 +193,7 @@ def generate_historical_price_recommendations(min_sale_probability):
         
         # Skip if historical price is lower than current lowest price
         if lowest_auction['buyout'] >= historical_price * 0.9:
-            continue            
+            continue
 
         # Create a modified version of the item_df with our modified auction
         modified_item_df = item_df.copy()
