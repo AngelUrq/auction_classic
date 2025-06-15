@@ -90,7 +90,7 @@ class AuctionTransformer(L.LightningModule):
             modifier_embeddings,
             position_embeddings
         ], dim=-1)
-        
+
         X = self.input_projection(combined_features)
         
         attention_mask = (item_index == 0)
@@ -268,7 +268,7 @@ class AuctionTransformer(L.LightningModule):
                 optimizer,
                 max_lr=self.learning_rate,
                 total_steps=self.trainer.estimated_stepping_batches,
-                pct_start=0.15,
+                pct_start=0.1,
                 div_factor=25,
                 final_div_factor=100,
                 anneal_strategy="cos"

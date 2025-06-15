@@ -128,6 +128,8 @@ def generate_recommendations(expected_profit, min_sale_probability):
         modified_item_df.loc[min_buyout_idx, 'bid'] = 0
         modified_item_df.loc[min_buyout_idx, 'time_left'] = 48.0
         modified_item_df.loc[min_buyout_idx, 'current_hours'] = 0
+        modified_item_df.loc[min_buyout_idx, 'first_appearance'] = prediction_time
+        modified_item_df.loc[min_buyout_idx, 'last_appearance'] = prediction_time
         
         # Predict sale probability for all auctions of this item type
         prediction_df = predict_dataframe(
@@ -151,8 +153,7 @@ def generate_recommendations(expected_profit, min_sale_probability):
                 'modifier_types': modified_auction_prediction['modifier_types'], 
                 'modifier_values': modified_auction_prediction['modifier_values'],
                 'prediction': modified_auction_prediction['prediction'],
-                'sale_probability': modified_auction_prediction['sale_probability'],
-                'original_price': lowest_auction['buyout']
+                'sale_probability': modified_auction_prediction['sale_probability']
             })
             recommendations.append(recommendation)
 
@@ -192,7 +193,7 @@ def generate_historical_price_recommendations(min_sale_probability):
         historical_price = hist_price[0]
         
         # Skip if historical price is lower than current lowest price
-        if lowest_auction['buyout'] >= historical_price * 0.9:
+        if lowest_auction['buyout'] >= (historical_price - 15) :
             continue
 
         # Create a modified version of the item_df with our modified auction
@@ -201,6 +202,8 @@ def generate_historical_price_recommendations(min_sale_probability):
         modified_item_df.loc[min_buyout_idx, 'bid'] = 0
         modified_item_df.loc[min_buyout_idx, 'time_left'] = 48.0
         modified_item_df.loc[min_buyout_idx, 'current_hours'] = 0
+        modified_item_df.loc[min_buyout_idx, 'first_appearance'] = prediction_time
+        modified_item_df.loc[min_buyout_idx, 'last_appearance'] = prediction_time
         
         # Predict sale probability for all auctions of this item type
         prediction_df = predict_dataframe(
@@ -227,6 +230,11 @@ def generate_historical_price_recommendations(min_sale_probability):
                 'sale_probability': modified_auction_prediction['sale_probability'],
                 'potential_profit': historical_price - lowest_auction['buyout']
             })
+
+            if not os.path.exists("pred"):
+                os.makedirs("pred")
+            prediction_df.to_csv(f"pred/{lowest_auction['item_id']}.csv", index=False)
+            
             recommendations.append(recommendation)
 
     if recommendations:
@@ -378,6 +386,8 @@ def create_ui():
                 modified_item_df.loc[min_buyout_idx, 'bid'] = 0
                 modified_item_df.loc[min_buyout_idx, 'time_left'] = 48.0
                 modified_item_df.loc[min_buyout_idx, 'current_hours'] = 0
+                modified_item_df.loc[min_buyout_idx, 'first_appearance'] = prediction_time
+                modified_item_df.loc[min_buyout_idx, 'last_appearance'] = prediction_time
                 
                 prediction_df = predict_dataframe(
                     model, 
