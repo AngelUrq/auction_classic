@@ -3,6 +3,7 @@ import argparse
 import csv
 import numpy as np
 import h5py
+import random
 from datetime import datetime
 from tqdm import tqdm
 
@@ -21,9 +22,9 @@ exclude_first_times = [
     '24-03-2025',
     '25-03-2025', 
     '26-03-2025',
-    '16-04-2025',
-    '17-04-2025',
-    '18-04-2025',
+    '11-06-2025',
+    '12-06-2025',
+    '13-06-2025',
 ]
 
 def pad_sequence(sequences, padding_value=0):
@@ -52,6 +53,10 @@ def process_auctions(args):
     h5_filename = 'sequences.h5'
     mappings_dir = args.mappings_dir
 
+    # Set random seed for reproducibility
+    random.seed(args.random_seed)
+    np.random.seed(args.random_seed)
+
     with open(args.timestamps, 'r') as f:
         timestamps = json.load(f)
 
@@ -74,6 +79,17 @@ def process_auctions(args):
             file_info[filepath] = date
 
     file_info = {k: v for k, v in sorted(file_info.items(), key=lambda item: item[1])}
+    
+    # Apply random sampling
+    total_files = len(file_info)
+    if args.sample_rate < 1.0:
+        file_paths = list(file_info.keys())
+        sampled_files = random.sample(file_paths, int(len(file_paths) * args.sample_rate))
+        file_info = {k: file_info[k] for k in sampled_files}
+        file_info = {k: v for k, v in sorted(file_info.items(), key=lambda item: item[1])}
+        print(f'Random sampling: Selected {len(file_info)} out of {total_files} files ({args.sample_rate*100:.1f}%)')
+    else:
+        print(f'Processing all {total_files} files (no sampling)')
 
     if not os.path.exists(os.path.join(args.output_dir, 'auction_indices.csv')):
         print('Creating auction_indices.csv')
@@ -237,6 +253,10 @@ if __name__ == "__main__":
     parser.add_argument('--timestamps', type=str, help='Path to the timestamps JSON file', required=True)
     parser.add_argument('--output_dir', type=str, help='Path to the output folder', required=True)
     parser.add_argument('--mappings_dir', type=str, help='Path to the mappings folder', required=True)
+    parser.add_argument('--sample_rate', type=float, default=1.0, 
+                       help='Fraction of files to process randomly (0.0-1.0, default: 1.0 = all files)')
+    parser.add_argument('--random_seed', type=int, default=42,
+                       help='Random seed for reproducible sampling (default: 42)')
     args = parser.parse_args()
 
     start_time = time.time()
