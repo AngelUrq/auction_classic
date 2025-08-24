@@ -49,7 +49,7 @@ def process_mappings(args):
 
     # Padding: 0, Unknown: 1
     item_to_index = {"0": 0, "1": 1}
-    context_to_index = {"0": 0} # We use 0 for unknown too in the context
+    context_to_index = {"0": 0, "1": 1}
     bonus_id_to_index = {"0": 0, "1": 1} 
     modifier_type_to_index = {"0": 0, "1": 1}
 

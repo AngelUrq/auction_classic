@@ -14,17 +14,9 @@ class AuctionDataset(torch.utils.data.Dataset):
             "time_left": 3,
             "current_hours": 4,
             "hour_sin": 5,
-            "weekday_sin": 6,
-            "hour_cos": 7,
-            "is_weekend": 8,
-            "delta_low": 9,
-            "delta_high": 10,
-            "unit_price": 11,
-            "unit_rank": 12,
-            "spread": 13,
-            "num_auctions": 14,
-            "median_price": 15,
-            "lowtail_vol": 16,
+            "hour_cos": 6,
+            "weekday_sin": 7,
+            "weekday_cos": 8,
         }
         self.h5_file = h5py.File(path, "r")
 
@@ -50,38 +42,10 @@ class AuctionDataset(torch.utils.data.Dataset):
         hours_on_sale = auctions[:, -1]
         auctions = auctions[:, :-1]
 
-        buyouts = auctions[:, 1].numpy()
-        quantities = auctions[:, 2].numpy()
-        valid = buyouts > 0
-        min_buyout = buyouts[valid].min() if valid.any() else 0.0
-        p95_buyout = np.percentile(buyouts[valid], 95) if valid.any() else min_buyout
-        median_buyout = np.median(buyouts[valid]) if valid.any() else min_buyout
-
-        delta_low = (buyouts - min_buyout) / (min_buyout + 1e-6)
-        delta_high = (p95_buyout - buyouts) / (p95_buyout + 1e-6)
-        unit_price = buyouts / np.maximum(quantities, 1)
-        ranks = unit_price.argsort(kind="mergesort")
-        unit_rank = np.empty_like(ranks, dtype=np.float32)
-        unit_rank[ranks] = np.arange(1, len(unit_price) + 1)
-        spread = (p95_buyout - min_buyout) / (min_buyout + 1e-6)
-        num_auctions = float(len(buyouts))
-        lowtail_vol = float((buyouts <= 1.05 * min_buyout).sum())
-
-        eng = np.column_stack([
-            delta_low,
-            delta_high,
-            unit_price,
-            unit_rank,
-            np.full_like(buyouts, spread, dtype=np.float32),
-            np.full_like(buyouts, num_auctions, dtype=np.float32),
-            np.full_like(buyouts, median_buyout, dtype=np.float32),
-            np.full_like(buyouts, lowtail_vol, dtype=np.float32),
-        ])
-
+        # Add space for hour_sin, hour_cos, weekday_sin, and weekday_cos features
         auctions = torch.cat([
             auctions,
-            torch.zeros((auctions.size(0), 4)),
-            torch.tensor(eng, dtype=torch.float32)
+            torch.zeros((auctions.size(0), 4))
         ], dim=1)
 
         hour_angle = 2 * np.pi * ts.hour / 24
@@ -89,7 +53,7 @@ class AuctionDataset(torch.utils.data.Dataset):
         auctions[:, self.column_map["hour_cos"]] = np.cos(hour_angle)
         weekday_angle = 2 * np.pi * ts.weekday() / 7
         auctions[:, self.column_map["weekday_sin"]] = np.sin(weekday_angle)
-        auctions[:, self.column_map["is_weekend"]] = 1.0 if ts.weekday() >= 5 else 0.0
+        auctions[:, self.column_map["weekday_cos"]] = np.cos(weekday_angle)
 
         auctions[:, self.column_map["bid"]] = torch.log1p(auctions[:, self.column_map["bid"]])
         auctions[:, self.column_map["buyout"]] = torch.log1p(auctions[:, self.column_map["buyout"]])
@@ -105,6 +69,15 @@ class AuctionDataset(torch.utils.data.Dataset):
         item_index_tensor = torch.tensor(item_idx, dtype=torch.int32).repeat(auctions.size(0))
         y = hours_on_sale / 48.0
 
-        return (auctions, item_index_tensor, contexts, bonus_lists,
-                modifier_types, modifier_values, current_hours_raw,
-                time_left_raw, buyout_rank), y
+        return {
+            'auctions': auctions,
+            'item_index': item_index_tensor,
+            'contexts': contexts,
+            'bonus_lists': bonus_lists,
+            'modifier_types': modifier_types,
+            'modifier_values': modifier_values,
+            'current_hours_raw': current_hours_raw,
+            'time_left_raw': time_left_raw,
+            'buyout_rank': buyout_rank,
+            'target': y
+        }

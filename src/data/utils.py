@@ -39,9 +39,19 @@ def pad_tensors_to_max_size(tensor_list):
     return torch.stack(padded_tensors)
 
 def collate_auctions(batch):
-    inputs, targets = zip(*batch)
-    auctions, item_index, contexts, bonus_lists, modifier_types, modifier_values, current_hours, time_left, buyout_ranking = zip(*inputs)
+    # Extract lists of each field from the batch of dictionaries
+    auctions = [item['auctions'] for item in batch]
+    item_index = [item['item_index'] for item in batch]
+    contexts = [item['contexts'] for item in batch]
+    bonus_lists = [item['bonus_lists'] for item in batch]
+    modifier_types = [item['modifier_types'] for item in batch]
+    modifier_values = [item['modifier_values'] for item in batch]
+    current_hours = [item['current_hours_raw'] for item in batch]
+    time_left = [item['time_left_raw'] for item in batch]
+    buyout_ranking = [item['buyout_rank'] for item in batch]
+    targets = [item['target'] for item in batch]
 
+    # Pad all tensors to max size
     auctions = pad_tensors_to_max_size(auctions)
     item_index = pad_tensors_to_max_size(item_index)
     contexts = pad_tensors_to_max_size(contexts)
@@ -53,7 +63,19 @@ def collate_auctions(batch):
     time_left = pad_tensors_to_max_size(time_left)
     targets = pad_tensors_to_max_size(targets)
 
-    return (auctions, item_index, contexts, bonus_lists, modifier_types, modifier_values, current_hours, time_left, buyout_ranking), targets
+    # Return as dictionary for consistency
+    return {
+        'auctions': auctions,
+        'item_index': item_index,
+        'contexts': contexts,
+        'bonus_lists': bonus_lists,
+        'modifier_types': modifier_types,
+        'modifier_values': modifier_values,
+        'current_hours_raw': current_hours,
+        'time_left_raw': time_left,
+        'buyout_rank': buyout_ranking,
+        'target': targets
+    }
 
 def create_access_token(client_id, client_secret, region='us'):
     """Create an OAuth access token for the Blizzard API.
