@@ -28,7 +28,7 @@ class AuctionTransformer(L.LightningModule):
 
         self.save_hyperparameters()
 
-        self.input_projection = nn.Linear(input_size + 5 * embedding_dim, d_model)
+        self.input_projection = nn.Linear(input_size + 4 * embedding_dim, d_model)
         self.output_projection = nn.Sequential(
             nn.Linear(d_model, d_model * 4),
             nn.ReLU(),
