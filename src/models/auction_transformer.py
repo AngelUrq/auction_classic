@@ -28,7 +28,7 @@ class AuctionTransformer(L.LightningModule):
 
         self.save_hyperparameters()
 
-        self.input_projection = nn.Linear(input_size + 4 * embedding_dim, d_model)
+        self.input_projection = nn.Linear(input_size + embedding_dim, d_model)
         self.output_projection = nn.Sequential(
             nn.Linear(d_model, d_model * 4),
             nn.ReLU(),
@@ -39,6 +39,34 @@ class AuctionTransformer(L.LightningModule):
         self.context_embeddings = nn.Embedding(n_contexts, embedding_dim)
         self.bonus_embeddings = nn.Embedding(n_bonuses, embedding_dim)
         self.modifier_embeddings = nn.Embedding(n_modtypes, embedding_dim)
+
+        # Item <- Context
+        self.context_conditioning = nn.Sequential(
+            nn.Linear(2 * embedding_dim, 2 * embedding_dim),
+            nn.SiLU(),
+            nn.Linear(2 * embedding_dim, 2 * embedding_dim)
+        )
+
+        # Bonuses <- (Item, Context)
+        self.bonus_conditioning = nn.Sequential(
+            nn.Linear(2 * embedding_dim, 2 * embedding_dim),
+            nn.SiLU(),
+            nn.Linear(2 * embedding_dim, 2 * embedding_dim)
+        )
+
+        # Item <- Modifiers
+        self.modifier_conditioning = nn.Sequential(
+            nn.Linear(2 * embedding_dim, 2 * embedding_dim),
+            nn.SiLU(),
+            nn.Linear(2 * embedding_dim, 2 * embedding_dim)
+        )
+
+        # Project scalar modifier values (already normalized) into embedding space
+        self.modifier_value_projection = nn.Sequential(
+            nn.Linear(1, embedding_dim // 2),
+            nn.ReLU(),
+            nn.Linear(embedding_dim // 2, embedding_dim)
+        )
         
         encoder_layer = nn.TransformerEncoderLayer(
             d_model=d_model,
@@ -56,42 +84,78 @@ class AuctionTransformer(L.LightningModule):
     def forward(self, X):
         (auctions, item_index, contexts, bonus_lists, modifier_types, modifier_values) = X
 
-        item_embeddings = self.item_embeddings(item_index.long())
-        context_embeddings = self.context_embeddings(contexts.long())
-        bonus_embeddings = self.bonus_embeddings(bonus_lists.long()) 
-        modifier_embeddings = self.modifier_embeddings(modifier_types.long())
+        # Base embeddings
+        item_embeddings = self.item_embeddings(item_index.long())                   # (B,S,D)
+        context_embeddings = self.context_embeddings(contexts.long())               # (B,S,D)
+        bonus_embeddings_full = self.bonus_embeddings(bonus_lists.long())           # (B,S,K,D)
+        modifier_type_embeddings = self.modifier_embeddings(modifier_types.long())  # (B,S,M,D)
 
-        item_mask = (item_index != 0).float().unsqueeze(-1)
+        # Masks
+        attention_mask = (item_index == 0)                                          # (B,S)
+        item_mask = (item_index != 0).float().unsqueeze(-1)                         # (B,S,1)
+        context_mask = (contexts != 0).float().unsqueeze(-1)                        # (B,S,1)
+        bonus_mask = (bonus_lists != 0).float().unsqueeze(-1)                       # (B,S,K,1)
+        modifier_mask = (modifier_types != 0).float().unsqueeze(-1)                 # (B,S,M,1)
+
+        # Apply masks
         item_embeddings = item_embeddings * item_mask
-
+        context_embeddings = context_embeddings * context_mask
         auctions = auctions * item_mask
 
-        context_mask = (contexts != 0).float().unsqueeze(-1)
-        context_embeddings = context_embeddings * context_mask
+        # ------------------------------
+        # Item <- Context conditioning
+        # ------------------------------
+        anchor_context = torch.cat([item_embeddings, context_embeddings], dim=-1)   # (B,S,2D)
+        gamma_beta_context = self.context_conditioning(anchor_context)              # (B,S,2D)
+        gamma_ctx, beta_ctx = torch.chunk(gamma_beta_context, 2, dim=-1)            # (B,S,D),(B,S,D)
+        item_embeddings = gamma_ctx * item_embeddings + beta_ctx                    # (B,S,D)
 
-        bonus_mask = (bonus_lists != 0).float().unsqueeze(-1)
-        bonus_embeddings = torch.sum(bonus_embeddings * bonus_mask, dim=-2) / (bonus_mask.sum(dim=-2) + 1e-6)
+        # -----------------------------------------------------
+        # Bonuses conditioned by (conditioned item, context)
+        # -----------------------------------------------------
+        anchor_bonus = torch.cat([item_embeddings, context_embeddings], dim=-1)     # (B,S,2D)
+        gamma_beta_bonus = self.bonus_conditioning(anchor_bonus)                    # (B,S,2D)
+        gamma_bonus, beta_bonus = torch.chunk(gamma_beta_bonus, 2, dim=-1)          # (B,S,D),(B,S,D)
+        gamma_bonus = gamma_bonus.unsqueeze(-2)                                     # (B,S,1,D)
+        beta_bonus  = beta_bonus.unsqueeze(-2)                                      # (B,S,1,D)
 
-        modifier_mask = (modifier_types != 0).float().unsqueeze(-1)
-        modifier_embeddings = modifier_values.unsqueeze(-1) * modifier_embeddings
-        modifier_embeddings = torch.sum(modifier_embeddings * modifier_mask, dim=-2) / (modifier_mask.sum(dim=-2) + 1e-6)
+        bonus_embeddings_conditioned = bonus_embeddings_full * gamma_bonus + beta_bonus
+        bonus_sum = (bonus_embeddings_conditioned * bonus_mask).sum(dim=-2)         # (B,S,D)
+        bonus_count = bonus_mask.sum(dim=-2).clamp_min(1e-6)                        # (B,S,1)
+        bonus_embeddings_pooled = bonus_sum / bonus_count                           # (B,S,D)
 
-        combined_features = torch.cat([
-            auctions, 
-            item_embeddings, 
-            context_embeddings, 
-            bonus_embeddings, 
-            modifier_embeddings,
-        ], dim=-1)
+        # ---------------------------------------------
+        # Modifiers: type emb + projected scalar value
+        # ---------------------------------------------
+        modifier_values = modifier_values.unsqueeze(-1)                             # (B,S,M,1)
+        modifier_value_vectors = self.modifier_value_projection(modifier_values)    # (B,S,M,D)
+        modifier_vectors = modifier_type_embeddings + modifier_value_vectors        # (B,S,M,D)
 
-        X = self.input_projection(combined_features)
-        
-        attention_mask = (item_index == 0)
+        modifier_sum = (modifier_vectors * modifier_mask).sum(dim=-2)               # (B,S,D)
+        modifier_count = modifier_mask.sum(dim=-2).clamp_min(1e-6)                  # (B,S,1)
+        modifier_embeddings_pooled = modifier_sum / modifier_count                  # (B,S,D)
+
+        # ---------------------------------------------
+        # Item <- Modifier conditioning
+        # ---------------------------------------------
+        anchor_modifier = torch.cat([item_embeddings, modifier_embeddings_pooled], dim=-1)
+        gamma_beta_modifier = self.modifier_conditioning(anchor_modifier)           # (B,S,2D)
+        gamma_mod, beta_mod = torch.chunk(gamma_beta_modifier, 2, dim=-1)           # (B,S,D),(B,S,D)
+        item_embeddings = gamma_mod * item_embeddings + beta_mod                    # (B,S,D)
+
+        item_embeddings_conditioned = (
+            item_embeddings
+            + context_embeddings
+            + bonus_embeddings_pooled
+            + modifier_embeddings_pooled
+        )                                                                           # (B,S,D)
+
+        # Project auctions + single conditioned item vector
+        features = torch.cat([auctions, item_embeddings_conditioned], dim=-1)       # (B,S,input_size + D)
+        X = self.input_projection(features)
         X = self.encoder(X, src_key_padding_mask=attention_mask)
-        
         X = self.output_projection(X)
         X = torch.sigmoid(X)
-        
         return X
 
     def _compute_loss_and_metrics(self, y_hat, y, item_index, current_hours, time_left):
@@ -177,6 +241,7 @@ class AuctionTransformer(L.LightningModule):
     def configure_optimizers(self):
         optimizer = torch.optim.AdamW(self.parameters(), lr=self.learning_rate)
         
+        """
         scheduler = {
             "scheduler": torch.optim.lr_scheduler.OneCycleLR(
                 optimizer,
@@ -189,6 +254,6 @@ class AuctionTransformer(L.LightningModule):
             ),
             "interval": "step",
             "frequency": 1
-        }
+        }"""
         
-        return {"optimizer": optimizer, "lr_scheduler": scheduler}
+        return {"optimizer": optimizer}#, "lr_scheduler": scheduler}
