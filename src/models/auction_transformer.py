@@ -22,7 +22,10 @@ class AuctionTransformer(L.LightningModule):
         num_layers: int = 4,
         dropout_p: float = 0.1,
         learning_rate: float = 1e-4,
-        logging_interval: int = 1000
+        logging_interval: int = 1000,
+        max_seq_length: int = 64,
+        log_raw_batch_data: bool = False,
+        log_step_predictions: bool = False
     ):
         super().__init__()
 
@@ -39,6 +42,10 @@ class AuctionTransformer(L.LightningModule):
         self.context_embeddings = nn.Embedding(n_contexts, embedding_dim)
         self.bonus_embeddings = nn.Embedding(n_bonuses, embedding_dim)
         self.modifier_embeddings = nn.Embedding(n_modtypes, embedding_dim)
+        
+        # Learned positional embeddings with max sequence length of max_seq_length
+        self.max_seq_length = max_seq_length
+        self.positional_embeddings = nn.Embedding(self.max_seq_length, d_model)
 
         # Item <- Context
         self.context_conditioning = nn.Sequential(
@@ -80,7 +87,9 @@ class AuctionTransformer(L.LightningModule):
         self.criterion = torch.nn.MSELoss(reduction='none')
         self.learning_rate = learning_rate
         self.logging_interval = logging_interval
-        
+        self.log_raw_batch_data = log_raw_batch_data
+        self.log_step_predictions = log_step_predictions
+
     def forward(self, X):
         (auctions, item_index, contexts, bonus_lists, modifier_types, modifier_values) = X
 
@@ -152,8 +161,17 @@ class AuctionTransformer(L.LightningModule):
 
         # Project auctions + single conditioned item vector
         features = torch.cat([auctions, item_embeddings_conditioned], dim=-1)       # (B,S,input_size + D)
-        X = self.input_projection(features)
-        X = self.encoder(X, src_key_padding_mask=attention_mask)
+        X = self.input_projection(features)                                         # (B,S,d_model)
+        
+        # Add learned positional embeddings
+        batch_size, seq_length = X.shape[:2]
+        seq_length = min(seq_length, self.max_seq_length)  # Ensure we don't exceed max seq length
+        position_ids = torch.arange(seq_length, device=X.device).unsqueeze(0).expand(batch_size, -1)  # (B,S)
+        positional_embeddings = self.positional_embeddings(position_ids)            # (B,S,d_model)
+
+        X = X[:, :seq_length] + positional_embeddings                               # (B,S,d_model)
+        
+        X = self.encoder(X, src_key_padding_mask=attention_mask[:, :seq_length])
         X = self.output_projection(X)
         X = torch.sigmoid(X)
         return X
@@ -194,6 +212,16 @@ class AuctionTransformer(L.LightningModule):
             
         return mse_loss, general_mae, recent_listings_mae, new_listings_mae, mask
     
+    def _compute_gradient_norm(self):
+        """Compute the total gradient norm across all parameters."""
+        total_norm = 0.0
+        for p in self.parameters():
+            if p.grad is not None:
+                param_norm = p.grad.data.norm(2)
+                total_norm += param_norm.item() ** 2
+        total_norm = total_norm ** (1. / 2)
+        return total_norm
+    
     def _log_metrics(self, prefix, mse_loss, general_mae, recent_listings_mae, new_listings_mae):
         """Log metrics for training or validation."""
         self.log(f'{prefix}/mse_loss', mse_loss, on_step=True, on_epoch=True, prog_bar=True, batch_size=1)
@@ -218,6 +246,16 @@ class AuctionTransformer(L.LightningModule):
         self._log_metrics('train', mse_loss, general_mae, recent_listings_mae, new_listings_mae)
         self.log('train/lr', self.optimizers().param_groups[0]['lr'], on_step=True, on_epoch=True)
         
+        if self.global_step % self.logging_interval == 0:
+            grad_norm = self._compute_gradient_norm()
+            self.log('train/grad_norm', grad_norm, on_step=True, on_epoch=True, prog_bar=True)
+            
+            if self.log_step_predictions:
+                self._log_step_predictions(batch_idx, batch['target'], y_hat, mask, 'train')
+
+        if self.global_step == 0 and self.log_raw_batch_data:
+            self._log_raw_batch_data(batch_idx, batch, y_hat, mask, 'train')
+        
         return mse_loss
 
     def validation_step(self, batch, batch_idx):
@@ -236,12 +274,90 @@ class AuctionTransformer(L.LightningModule):
 
         self._log_metrics('val', mse_loss, general_mae, recent_listings_mae, new_listings_mae)
 
+        if self.log_step_predictions:
+            self._log_step_predictions(batch_idx, batch['target'], y_hat, mask, 'val')
+
+        if self.global_step == 0 and self.log_raw_batch_data:
+            print("Logging raw batch data")
+            self._log_raw_batch_data(batch_idx, batch, y_hat, mask, 'val')
+
         return mse_loss
+
+    def _log_step_predictions(self, batch_idx, y, y_hat, mask, step_type):
+        """Log predictions for the current step to CSV files.
+        
+        Args:
+            batch_idx: The index of the current batch
+            y: Ground truth values
+            y_hat: Model predictions
+            mask: Validity mask for the predictions
+            step_type: Either 'train' or 'val'
+        """
+        step_dir = Path(f"../generated/logs/{step_type}/step_{self.global_step}")
+        step_dir.mkdir(parents=True, exist_ok=True)
+        
+        for batch_item in range(len(y)):
+            targets = y[batch_item].detach().cpu()
+            predictions = y_hat[batch_item, :, 0].detach().cpu()
+            validity_mask = mask[batch_item, :, 0].detach().cpu()
+            
+            data = {
+                'Position': range(len(targets)),
+                'Target': [float(t * 48.0) for t in targets],
+                'Prediction': [float(p * 48.0) for p in predictions],
+                'Status': ['Valid' if validity_mask[i] else 'Padding' for i in range(len(targets))]
+            }
+            df = pd.DataFrame(data)
+            
+            output_file = step_dir / f"batch_{batch_idx}_item_{batch_item}.csv"
+            df.to_csv(output_file, index=False)
+
+    def _log_raw_batch_data(self, batch_idx, batch, y_hat, mask, step_type):
+        """Log raw batch data to CSV files.
+        
+        Args:
+            batch_idx: The index of the current batch
+            batch: Input batch containing all features
+            y_hat: Model predictions
+            mask: Validity mask
+            step_type: Either 'train' or 'val'
+        """
+        batch_dir = Path(f"../generated/logs/{step_type}/raw_batch_data")
+        batch_dir.mkdir(parents=True, exist_ok=True)
+        
+        auctions = batch['auctions']
+        targets = batch['target'].detach().cpu().float() * 48.0
+        validity_mask = mask.detach().cpu().float()
+        batch_size, seq_length, n_features = auctions.shape
+        
+        for batch_item in range(batch_size):
+            sequence_features = auctions[batch_item].detach().cpu().float()
+            sequence_target = targets[batch_item].detach().cpu().float()
+            predictions = y_hat[batch_item, :, 0].detach().cpu().float() * 48.0
+            
+            df_sequence = pd.DataFrame(
+                sequence_features,
+                columns=[f'feature_{i}' for i in range(n_features)]
+            )
+            
+            df_sequence['target'] = sequence_target
+            df_sequence['prediction'] = predictions
+            df_sequence['is_valid'] = [validity_mask[batch_item, i, 0] for i in range(seq_length)]
+            
+            # Add additional features if available
+            if 'current_hours_raw' in batch:
+                df_sequence['current_hours'] = batch['current_hours_raw'][batch_item].detach().cpu().float()
+            if 'time_left_raw' in batch:
+                df_sequence['time_left'] = batch['time_left_raw'][batch_item].detach().cpu().float()
+            
+            sequence_file = batch_dir / f"raw_batch_{batch_idx}_sequence_{batch_item}.csv"
+            df_sequence.to_csv(sequence_file, index=False)
 
     def configure_optimizers(self):
         optimizer = torch.optim.AdamW(self.parameters(), lr=self.learning_rate)
+
+        print(f'total steps: {self.trainer.estimated_stepping_batches}')
         
-        """
         scheduler = {
             "scheduler": torch.optim.lr_scheduler.OneCycleLR(
                 optimizer,
@@ -254,6 +370,6 @@ class AuctionTransformer(L.LightningModule):
             ),
             "interval": "step",
             "frequency": 1
-        }"""
-        
-        return {"optimizer": optimizer}#, "lr_scheduler": scheduler}
+        }
+    
+        return {"optimizer": optimizer, "lr_scheduler": scheduler}
