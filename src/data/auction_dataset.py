@@ -67,7 +67,7 @@ class AuctionDataset(torch.utils.data.Dataset):
             modifier_values = (modifier_values - self.feature_stats["modifiers_mean"]) / (self.feature_stats["modifiers_std"] + 1e-6)
 
         item_index_tensor = torch.tensor(item_idx, dtype=torch.int32).repeat(auctions.size(0))
-        y = hours_on_sale / 48.0
+        y = hours_on_sale
 
         return {
             'auctions': auctions,

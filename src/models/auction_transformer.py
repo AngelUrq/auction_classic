@@ -22,10 +22,11 @@ class AuctionTransformer(L.LightningModule):
         num_layers: int = 4,
         dropout_p: float = 0.1,
         learning_rate: float = 1e-4,
+        quantiles: list[float] = [0.1, 0.5, 0.9],
         logging_interval: int = 1000,
         max_seq_length: int = 64,
         log_raw_batch_data: bool = False,
-        log_step_predictions: bool = False
+        log_step_predictions: bool = False,
     ):
         super().__init__()
 
@@ -35,7 +36,7 @@ class AuctionTransformer(L.LightningModule):
         self.output_projection = nn.Sequential(
             nn.Linear(d_model, d_model * 4),
             nn.ReLU(),
-            nn.Linear(d_model * 4, 1)
+            nn.Linear(d_model * 4, len(quantiles))
         )
 
         self.item_embeddings = nn.Embedding(n_items, embedding_dim)
@@ -84,11 +85,11 @@ class AuctionTransformer(L.LightningModule):
         )
         self.encoder = nn.TransformerEncoder(encoder_layer, num_layers=num_layers)
         
-        self.criterion = torch.nn.MSELoss(reduction='none')
         self.learning_rate = learning_rate
         self.logging_interval = logging_interval
         self.log_raw_batch_data = log_raw_batch_data
         self.log_step_predictions = log_step_predictions
+        self.quantiles = quantiles
 
     def forward(self, X):
         (auctions, item_index, contexts, bonus_lists, modifier_types, modifier_values) = X
@@ -173,45 +174,63 @@ class AuctionTransformer(L.LightningModule):
         
         X = self.encoder(X, src_key_padding_mask=attention_mask[:, :seq_length])
         X = self.output_projection(X)
-        X = torch.sigmoid(X)
+
         return X
 
     def _compute_loss_and_metrics(self, y_hat, y, item_index, current_hours, time_left):
         """Compute loss and metrics for both training and validation."""
-        mask = (item_index != 0).float().unsqueeze(-1)
-        weights = torch.exp(-current_hours / 24.0).unsqueeze(-1)
-        
-        # Compute MSE loss
-        errors = self.criterion(y_hat, y.unsqueeze(2))  
-        weighted_errors = errors * mask * weights
-        mse_loss = weighted_errors.sum() / (mask * weights).sum()
-        
+        item_mask = (item_index != 0).float().unsqueeze(-1) # (B,S,1)
+
+        current_hours = current_hours.unsqueeze(-1)  # (B,S,1) 
+        time_left = time_left.unsqueeze(-1)      # (B,S,1)
+        weights = torch.exp(-current_hours / 24.0)  # (B, S, 1)
+
+        # ----- Pinball loss over all quantiles -----
+        quantile_targets = torch.as_tensor(
+            self.quantiles, device=y_hat.device, dtype=y_hat.dtype
+        ).view(1, 1, -1)  # (1,1,Q)
+
+        prediction_errors = y.unsqueeze(-1) - y_hat  # (B, S, Q)
+        quantile_losses = torch.maximum(
+            quantile_targets * prediction_errors,
+            (quantile_targets - 1.0) * prediction_errors
+        )  # (B, S, Q)
+
+        pinball_loss = (quantile_losses * item_mask * weights).sum() / (item_mask * weights).sum().clamp_min(1e-6)
+
+        # ----- Metrics computed on the median (tau=0.5) channel -----
+        median_index = self.quantiles.index(0.5)
+        median_predictions = y_hat[..., median_index]  # (B, S)
+
         with torch.no_grad():
-            # Calculate MAE for all valid items
+            # General MAE (in hours)
+            valid_items_sum = item_mask.sum().clamp_min(1e-6)
             general_mae = torch.nn.functional.l1_loss(
-                y_hat * mask * 48.0, 
-                y.unsqueeze(2) * mask * 48.0, 
+                median_predictions.unsqueeze(-1) * item_mask,
+                y.unsqueeze(-1)                  * item_mask,
                 reduction='sum'
-            ) / mask.sum()
-            
-            # Calculate MAE for recent listings with full duration
-            recent_listings_mask = mask * (current_hours <= 12.0).float().unsqueeze(-1) * (time_left == 48.0).float().unsqueeze(-1)
+            ) / valid_items_sum
+
+            # Recent listings: current_hours <= 12 and full duration == 48
+            recent_mask = item_mask * (current_hours <= 12.0).float() * (time_left == 48.0).float()
+            recent_items_sum = recent_mask.sum().clamp_min(1e-6)
             recent_listings_mae = torch.nn.functional.l1_loss(
-                y_hat * recent_listings_mask * 48.0, 
-                y.unsqueeze(2) * recent_listings_mask * 48.0, 
+                median_predictions.unsqueeze(-1) * recent_mask,
+                y.unsqueeze(-1)                  * recent_mask,
                 reduction='sum'
-            ) / (recent_listings_mask.sum() + 1e-6)
-            
-            # Calculate MAE for brand new listings (current_hours = 0)
-            new_listings_mask = mask * (current_hours == 0.0).float().unsqueeze(-1)
+            ) / recent_items_sum
+
+            # Brand new listings: current_hours == 0
+            new_mask = item_mask * (current_hours == 0.0).float()
+            new_items_sum = new_mask.sum().clamp_min(1e-6)
             new_listings_mae = torch.nn.functional.l1_loss(
-                y_hat * new_listings_mask * 48.0, 
-                y.unsqueeze(2) * new_listings_mask * 48.0, 
+                median_predictions.unsqueeze(-1) * new_mask,
+                y.unsqueeze(-1)                  * new_mask,
                 reduction='sum'
-            ) / (new_listings_mask.sum() + 1e-6)
-            
-        return mse_loss, general_mae, recent_listings_mae, new_listings_mae, mask
-    
+            ) / new_items_sum
+
+        return pinball_loss, general_mae, recent_listings_mae, new_listings_mae, item_mask
+        
     def _compute_gradient_norm(self):
         """Compute the total gradient norm across all parameters."""
         total_norm = 0.0
@@ -221,10 +240,73 @@ class AuctionTransformer(L.LightningModule):
                 total_norm += param_norm.item() ** 2
         total_norm = total_norm ** (1. / 2)
         return total_norm
-    
-    def _log_metrics(self, prefix, mse_loss, general_mae, recent_listings_mae, new_listings_mae):
+
+    def _compute_interval_metrics(
+        self, y_hat, y, item_mask, lower_quantile=0.1, upper_quantile=0.9
+    ):
+        """
+        Compute coverage and mean interval width for [lower_quantile, upper_quantile].
+        Assumes y_hat and y are in HOURS already (0..48).
+        """
+        lower_index = self.quantiles.index(lower_quantile)
+        upper_index = self.quantiles.index(upper_quantile)
+
+        lower_predictions = y_hat[..., lower_index]  # (B, S)
+        upper_predictions = y_hat[..., upper_index]  # (B, S)
+
+        inside_interval = ((y >= lower_predictions) & (y <= upper_predictions)).float().unsqueeze(-1)  # (B, S, 1)
+
+        valid_items_sum = item_mask.sum().clamp_min(1e-6)
+        coverage = (inside_interval * item_mask).sum() / valid_items_sum
+
+        interval_width = (upper_predictions - lower_predictions).unsqueeze(-1)  # (B, S, 1), in HOURS
+        mean_interval_width = (interval_width * item_mask).sum() / valid_items_sum  # hours
+
+        return coverage.item(), mean_interval_width.item()
+
+    def _compute_quantile_calibration(self, y_hat, y, item_mask):
+        """
+        For each tau in self.quantiles, compute observed fraction of targets <= predicted q_tau.
+        """
+        quantile_calibration = {}
+        total_valid_items = item_mask.sum().clamp_min(1e-6)
+
+        for tau in self.quantiles:
+            tau_index = self.quantiles.index(tau)
+            quantile_predictions = y_hat[..., tau_index]  # (B, S)
+            targets_below_or_equal = ((y <= quantile_predictions).float().unsqueeze(-1) * item_mask).sum()
+            quantile_calibration[float(tau)] = (targets_below_or_equal / total_valid_items).item()
+
+        return quantile_calibration
+
+    def _log_quantile_metrics(self, prefix, y_hat, y, item_mask, lower_quantile=0.1, upper_quantile=0.9):
+        """
+        Log coverage/width for [lower_quantile, upper_quantile] and per-quantile calibration.
+        Assumes y_hat and y are in HOURS already.
+        """
+        print(f'Logging quantile metrics at step {self.global_step}')
+        coverage, mean_interval_width = self._compute_interval_metrics(
+            y_hat, y, item_mask, lower_quantile=lower_quantile, upper_quantile=upper_quantile
+        )
+        self.log(
+            f"{prefix}/coverage_p{int(lower_quantile*100)}_p{int(upper_quantile*100)}",
+            coverage, on_step=False, on_epoch=True, prog_bar=False, batch_size=1
+        )
+        self.log(
+            f"{prefix}/width_p{int(lower_quantile*100)}_p{int(upper_quantile*100)}_hours",
+            mean_interval_width, on_step=False, on_epoch=True, prog_bar=False, batch_size=1
+        )
+
+        quantile_calibration = self._compute_quantile_calibration(y_hat, y, item_mask)
+        for tau, observed_fraction in quantile_calibration.items():
+            self.log(
+                f"{prefix}/quantile_calibration_{tau:.2f}",
+                observed_fraction, on_step=False, on_epoch=True, prog_bar=False, batch_size=1
+            )
+
+    def _log_metrics(self, prefix, loss, general_mae, recent_listings_mae, new_listings_mae):
         """Log metrics for training or validation."""
-        self.log(f'{prefix}/mse_loss', mse_loss, on_step=True, on_epoch=True, prog_bar=True, batch_size=1)
+        self.log(f'{prefix}/loss', loss, on_step=True, on_epoch=True, prog_bar=True, batch_size=1)
         self.log(f'{prefix}/general_mae', general_mae, on_step=True, on_epoch=True, prog_bar=True, batch_size=1)
         self.log(f'{prefix}/recent_listings_mae', recent_listings_mae, on_step=True, on_epoch=True, prog_bar=True, batch_size=1)
         self.log(f'{prefix}/new_listings_mae', new_listings_mae, on_step=True, on_epoch=True, prog_bar=True, batch_size=1)
@@ -239,16 +321,18 @@ class AuctionTransformer(L.LightningModule):
             batch['modifier_values'], 
         ))
         
-        mse_loss, general_mae, recent_listings_mae, new_listings_mae, mask = self._compute_loss_and_metrics(
+        loss, general_mae, recent_listings_mae, new_listings_mae, mask = self._compute_loss_and_metrics(
             y_hat, batch['target'], batch['item_index'], batch['current_hours_raw'], batch['time_left_raw']
         )
 
-        self._log_metrics('train', mse_loss, general_mae, recent_listings_mae, new_listings_mae)
+        self._log_metrics('train', loss, general_mae, recent_listings_mae, new_listings_mae)
         self.log('train/lr', self.optimizers().param_groups[0]['lr'], on_step=True, on_epoch=True)
         
         if self.global_step % self.logging_interval == 0:
+            print(f'Logging metrics at step {self.global_step}')
             grad_norm = self._compute_gradient_norm()
             self.log('train/grad_norm', grad_norm, on_step=True, on_epoch=True, prog_bar=True)
+            self._log_quantile_metrics(prefix='train', y_hat=y_hat, y=batch['target'], item_mask=mask)
             
             if self.log_step_predictions:
                 self._log_step_predictions(batch_idx, batch['target'], y_hat, mask, 'train')
@@ -256,7 +340,7 @@ class AuctionTransformer(L.LightningModule):
         if self.global_step == 0 and self.log_raw_batch_data:
             self._log_raw_batch_data(batch_idx, batch, y_hat, mask, 'train')
         
-        return mse_loss
+        return loss
 
     def validation_step(self, batch, batch_idx):
         y_hat = self((
@@ -268,11 +352,12 @@ class AuctionTransformer(L.LightningModule):
             batch['modifier_values'],
         ))
         
-        mse_loss, general_mae, recent_listings_mae, new_listings_mae, mask = self._compute_loss_and_metrics(
+        loss, general_mae, recent_listings_mae, new_listings_mae, mask = self._compute_loss_and_metrics(
             y_hat, batch['target'], batch['item_index'], batch['current_hours_raw'], batch['time_left_raw']
         )
 
-        self._log_metrics('val', mse_loss, general_mae, recent_listings_mae, new_listings_mae)
+        self._log_metrics('val', loss, general_mae, recent_listings_mae, new_listings_mae)
+        self._log_quantile_metrics(prefix='val', y_hat=y_hat, y=batch['target'], item_mask=mask)
 
         if self.log_step_predictions:
             self._log_step_predictions(batch_idx, batch['target'], y_hat, mask, 'val')
@@ -281,7 +366,7 @@ class AuctionTransformer(L.LightningModule):
             print("Logging raw batch data")
             self._log_raw_batch_data(batch_idx, batch, y_hat, mask, 'val')
 
-        return mse_loss
+        return loss
 
     def _log_step_predictions(self, batch_idx, y, y_hat, mask, step_type):
         """Log predictions for the current step to CSV files.
@@ -289,7 +374,7 @@ class AuctionTransformer(L.LightningModule):
         Args:
             batch_idx: The index of the current batch
             y: Ground truth values
-            y_hat: Model predictions
+            y_hat: Model predictions (B, S, Q) where Q is number of quantiles
             mask: Validity mask for the predictions
             step_type: Either 'train' or 'val'
         """
@@ -298,13 +383,18 @@ class AuctionTransformer(L.LightningModule):
         
         for batch_item in range(len(y)):
             targets = y[batch_item].detach().cpu()
-            predictions = y_hat[batch_item, :, 0].detach().cpu()
+            # Extract all quantile predictions
+            q10_predictions = y_hat[batch_item, :, 0].detach().cpu()  # 0.1 quantile
+            q50_predictions = y_hat[batch_item, :, 1].detach().cpu()  # 0.5 quantile (median)
+            q90_predictions = y_hat[batch_item, :, 2].detach().cpu()  # 0.9 quantile
             validity_mask = mask[batch_item, :, 0].detach().cpu()
             
             data = {
                 'Position': range(len(targets)),
-                'Target': [float(t * 48.0) for t in targets],
-                'Prediction': [float(p * 48.0) for p in predictions],
+                'Target': [float(t) for t in targets],
+                'Prediction_Q10': [float(p) for p in q10_predictions],
+                'Prediction_Q50': [float(p) for p in q50_predictions],
+                'Prediction_Q90': [float(p) for p in q90_predictions],
                 'Status': ['Valid' if validity_mask[i] else 'Padding' for i in range(len(targets))]
             }
             df = pd.DataFrame(data)
@@ -326,14 +416,17 @@ class AuctionTransformer(L.LightningModule):
         batch_dir.mkdir(parents=True, exist_ok=True)
         
         auctions = batch['auctions']
-        targets = batch['target'].detach().cpu().float() * 48.0
+        targets = batch['target'].detach().cpu().float()
         validity_mask = mask.detach().cpu().float()
         batch_size, seq_length, n_features = auctions.shape
         
         for batch_item in range(batch_size):
             sequence_features = auctions[batch_item].detach().cpu().float()
             sequence_target = targets[batch_item].detach().cpu().float()
-            predictions = y_hat[batch_item, :, 0].detach().cpu().float() * 48.0
+            # Extract all quantile predictions
+            q10_predictions = y_hat[batch_item, :, 0].detach().cpu().float()  # 0.1 quantile
+            q50_predictions = y_hat[batch_item, :, 1].detach().cpu().float()  # 0.5 quantile (median)
+            q90_predictions = y_hat[batch_item, :, 2].detach().cpu().float()  # 0.9 quantile
             
             df_sequence = pd.DataFrame(
                 sequence_features,
@@ -341,7 +434,9 @@ class AuctionTransformer(L.LightningModule):
             )
             
             df_sequence['target'] = sequence_target
-            df_sequence['prediction'] = predictions
+            df_sequence['prediction_q10'] = q10_predictions
+            df_sequence['prediction_q50'] = q50_predictions
+            df_sequence['prediction_q90'] = q90_predictions
             df_sequence['is_valid'] = [validity_mask[batch_item, i, 0] for i in range(seq_length)]
             
             # Add additional features if available
