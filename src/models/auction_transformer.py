@@ -183,7 +183,7 @@ class AuctionTransformer(L.LightningModule):
 
         current_hours = current_hours.unsqueeze(-1)  # (B,S,1) 
         time_left = time_left.unsqueeze(-1)      # (B,S,1)
-        weights = torch.exp(-current_hours / 24.0)  # (B, S, 1)
+        weights = 1.0#torch.exp(-current_hours / 24.0)  # (B, S, 1)
 
         # ----- Pinball loss over all quantiles -----
         quantile_targets = torch.as_tensor(
@@ -283,25 +283,28 @@ class AuctionTransformer(L.LightningModule):
         """
         Log coverage/width for [lower_quantile, upper_quantile] and per-quantile calibration.
         Assumes y_hat and y are in HOURS already.
-        """
-        print(f'Logging quantile metrics at step {self.global_step}')
+        """ 
         coverage, mean_interval_width = self._compute_interval_metrics(
             y_hat, y, item_mask, lower_quantile=lower_quantile, upper_quantile=upper_quantile
         )
+        
+        on_step = True if prefix == 'train' else False
+        on_epoch = True
+        
         self.log(
             f"{prefix}/coverage_p{int(lower_quantile*100)}_p{int(upper_quantile*100)}",
-            coverage, on_step=False, on_epoch=True, prog_bar=False, batch_size=1
+            coverage, on_step=on_step, on_epoch=on_epoch, prog_bar=False, batch_size=1
         )
         self.log(
             f"{prefix}/width_p{int(lower_quantile*100)}_p{int(upper_quantile*100)}_hours",
-            mean_interval_width, on_step=False, on_epoch=True, prog_bar=False, batch_size=1
+            mean_interval_width, on_step=on_step, on_epoch=on_epoch, prog_bar=False, batch_size=1
         )
 
         quantile_calibration = self._compute_quantile_calibration(y_hat, y, item_mask)
         for tau, observed_fraction in quantile_calibration.items():
             self.log(
                 f"{prefix}/quantile_calibration_{tau:.2f}",
-                observed_fraction, on_step=False, on_epoch=True, prog_bar=False, batch_size=1
+                observed_fraction, on_step=on_step, on_epoch=on_epoch, prog_bar=False, batch_size=1
             )
 
     def _log_metrics(self, prefix, loss, general_mae, recent_listings_mae, new_listings_mae):
@@ -329,7 +332,6 @@ class AuctionTransformer(L.LightningModule):
         self.log('train/lr', self.optimizers().param_groups[0]['lr'], on_step=True, on_epoch=True)
         
         if self.global_step % self.logging_interval == 0:
-            print(f'Logging metrics at step {self.global_step}')
             grad_norm = self._compute_gradient_norm()
             self.log('train/grad_norm', grad_norm, on_step=True, on_epoch=True, prog_bar=True)
             self._log_quantile_metrics(prefix='train', y_hat=y_hat, y=batch['target'], item_mask=mask)
@@ -363,7 +365,6 @@ class AuctionTransformer(L.LightningModule):
             self._log_step_predictions(batch_idx, batch['target'], y_hat, mask, 'val')
 
         if self.global_step == 0 and self.log_raw_batch_data:
-            print("Logging raw batch data")
             self._log_raw_batch_data(batch_idx, batch, y_hat, mask, 'val')
 
         return loss
@@ -458,7 +459,7 @@ class AuctionTransformer(L.LightningModule):
                 optimizer,
                 max_lr=self.learning_rate,
                 total_steps=self.trainer.estimated_stepping_batches,
-                pct_start=0.1,
+                pct_start=0.05,
                 div_factor=25,
                 final_div_factor=100,
                 anneal_strategy="cos"

@@ -1,6 +1,6 @@
 import os, json, torch, time
 import argparse
-import csv
+import pandas as pd
 import numpy as np
 import h5py
 from datetime import datetime
@@ -49,7 +49,7 @@ def process_auctions(args):
     print('Processing auctions...')
     file_info = {}
     data_dir = args.data_dir
-    h5_filename = 'sequences.h5'
+    h5_filename = 'sequences2.h5'
     mappings_dir = args.mappings_dir
 
     with open(args.timestamps, 'r') as f:
@@ -78,24 +78,25 @@ def process_auctions(args):
     total_files = len(file_info)
     print(f'Processing all {total_files} files')
 
-    if not os.path.exists(os.path.join(args.output_dir, 'auction_indices.csv')):
-        print('Creating auction_indices.csv')
-
-        with open(os.path.join(args.output_dir, 'auction_indices.csv'), 'w', newline='') as csvfile:
-            writer = csv.writer(csvfile)
-            writer.writerow([
-                'record', 
-                'item_index', 
-                'g_hours_on_sale_len',
-                'g_hours_on_sale_mean',
-                'g_hours_on_sale_std',
-                'g_hours_on_sale_min',
-                'g_hours_on_sale_max',
-                'g_current_hours_mean',
-                'g_current_hours_std',
-                'g_current_hours_min',
-                'g_current_hours_max'
-            ])
+    parquet_file_path = os.path.join(args.output_dir, 'auction_indices.parquet')
+    if not os.path.exists(parquet_file_path):
+        print('Creating auction_indices.parquet')
+        # Create empty DataFrame with the required columns
+        columns = [
+            'record', 
+            'item_index', 
+            'g_hours_on_sale_len',
+            'g_hours_on_sale_mean',
+            'g_hours_on_sale_std',
+            'g_hours_on_sale_min',
+            'g_hours_on_sale_max',
+            'g_current_hours_mean',
+            'g_current_hours_std',
+            'g_current_hours_min',
+            'g_current_hours_max'
+        ]
+        empty_df = pd.DataFrame(columns=columns)
+        empty_df.to_parquet(parquet_file_path, index=False)
 
     if not os.path.exists(os.path.join(args.output_dir, h5_filename)):
         print(f'Creating {h5_filename}')
@@ -230,9 +231,28 @@ def process_auctions(args):
                 h5_file[group_path].create_dataset(f'{dataset_name}/modifier_values', data=modifier_values)
                 h5_file[group_path].create_dataset(f'{dataset_name}/buyout_ranking', data=buyout_ranking)
 
-        with open(os.path.join(args.output_dir, 'auction_indices.csv'), 'a', newline='') as f:
-            writer = csv.writer(f)
-            writer.writerows(auction_indices)
+        if auction_indices:
+            new_df = pd.DataFrame(auction_indices, columns=[
+                'record', 
+                'item_index', 
+                'g_hours_on_sale_len',
+                'g_hours_on_sale_mean',
+                'g_hours_on_sale_std',
+                'g_hours_on_sale_min',
+                'g_hours_on_sale_max',
+                'g_current_hours_mean',
+                'g_current_hours_std',
+                'g_current_hours_min',
+                'g_current_hours_max'
+            ])
+            
+            parquet_file_path = os.path.join(args.output_dir, 'indices.parquet')
+            if os.path.exists(parquet_file_path):
+                existing_df = pd.read_parquet(parquet_file_path)
+                combined_df = pd.concat([existing_df, new_df], ignore_index=True)
+                combined_df.to_parquet(parquet_file_path, index=False)
+            else:
+                new_df.to_parquet(parquet_file_path, index=False)
             
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Check JSON files in auctions folder')
