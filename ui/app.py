@@ -25,6 +25,7 @@ feature_stats = None
 prediction_time = None
 recommendations = None
 
+
 def load_data_and_model():
     """Load data and model only once"""
     global model_loaded, df_auctions, model, feature_stats, prediction_time, historical_prices
@@ -74,7 +75,7 @@ def load_data_and_model():
     feature_stats = torch.load(os.path.join(base_path, 'generated/feature_stats.pt'))
 
     model = AuctionTransformer.load_from_checkpoint(
-        os.path.join(base_path, 'models/auction_transformer_40M_39GB/last.ckpt'),
+        os.path.join(base_path, 'models/auction-transformer-quantile/epoch_epoch=01.ckpt'),
         map_location=device
     )
 
@@ -103,7 +104,8 @@ def load_data_and_model():
     return "Model and data loaded successfully!"
 
 def generate_recommendations(expected_profit, min_sale_probability):
-    """Generate auction recommendations based on expected profit and minimum sale probability."""
+    """Generate auction recommendations based on median price and minimum expected profit filter."""
+    print("Generating recommendations...")
     global df_auctions, model, feature_stats, prediction_time
     
     if not model_loaded:
@@ -111,6 +113,7 @@ def generate_recommendations(expected_profit, min_sale_probability):
     
     recommendations = []
     unique_items = df_auctions['item_index'].unique()
+    print(f"Found {len(unique_items)} unique items")
     
     for item_idx in tqdm(unique_items):
         item_df = df_auctions[df_auctions['item_index'] == item_idx].copy()
@@ -118,13 +121,23 @@ def generate_recommendations(expected_profit, min_sale_probability):
         if item_df.empty:
             continue
             
+        # Calculate median price for this item
+        median_price = item_df['buyout'].median() * 0.75
+        
         # Get the auction with the lowest buyout price
         min_buyout_idx = item_df['buyout'].idxmin()
         lowest_auction = item_df.loc[min_buyout_idx].copy()
         
-        # Create a modified version of the item_df with our modified auction
+        # Calculate potential profit using median price
+        potential_profit = median_price - lowest_auction['buyout']
+        
+        # Filter by minimum expected profit
+        if potential_profit < expected_profit:
+            continue
+        
+        # Create a modified version of the item_df with our modified auction using median price
         modified_item_df = item_df.copy()
-        modified_item_df.loc[min_buyout_idx, 'buyout'] = lowest_auction['buyout'] + expected_profit
+        modified_item_df.loc[min_buyout_idx, 'buyout'] = median_price
         modified_item_df.loc[min_buyout_idx, 'bid'] = 0
         modified_item_df.loc[min_buyout_idx, 'time_left'] = 48.0
         modified_item_df.loc[min_buyout_idx, 'current_hours'] = 0
@@ -146,13 +159,15 @@ def generate_recommendations(expected_profit, min_sale_probability):
         if modified_auction_prediction['sale_probability'] >= min_sale_probability:
             recommendation = pd.Series({
                 'item_id': lowest_auction['item_id'],
-                'buyout': modified_auction_prediction['buyout'] - expected_profit,
-                'suggested_price': lowest_auction['buyout'] + expected_profit,
+                'buyout': round(lowest_auction['buyout'], 2),
+                'suggested_price': round(median_price, 2),
                 'quantity': modified_auction_prediction['quantity'],
                 'bonus_lists': modified_auction_prediction['bonus_lists'],
                 'modifier_types': modified_auction_prediction['modifier_types'], 
                 'modifier_values': modified_auction_prediction['modifier_values'],
-                'prediction': modified_auction_prediction['prediction'],
+                'prediction_q10': modified_auction_prediction['prediction_q10'],
+                'prediction_q50': modified_auction_prediction['prediction_q50'],
+                'prediction_q90': modified_auction_prediction['prediction_q90'],
                 'sale_probability': modified_auction_prediction['sale_probability']
             })
             recommendations.append(recommendation)
@@ -220,15 +235,17 @@ def generate_historical_price_recommendations(min_sale_probability):
         if modified_auction_prediction['sale_probability'] >= min_sale_probability:
             recommendation = pd.Series({
                 'item_id': lowest_auction['item_id'],
-                'buyout': lowest_auction['buyout'],
-                'suggested_price': historical_price,
+                'buyout': round(lowest_auction['buyout'], 2),
+                'suggested_price': round(historical_price, 2),
                 'quantity': modified_auction_prediction['quantity'],
                 'bonus_lists': modified_auction_prediction['bonus_lists'],
                 'modifier_types': modified_auction_prediction['modifier_types'], 
                 'modifier_values': modified_auction_prediction['modifier_values'],
-                'prediction': modified_auction_prediction['prediction'],
+                'prediction_q10': modified_auction_prediction['prediction_q10'],
+                'prediction_q50': modified_auction_prediction['prediction_q50'],
+                'prediction_q90': modified_auction_prediction['prediction_q90'],
                 'sale_probability': modified_auction_prediction['sale_probability'],
-                'potential_profit': historical_price - lowest_auction['buyout']
+                'potential_profit': round(historical_price - lowest_auction['buyout'], 2)
             })
 
             if not os.path.exists("pred"):
@@ -254,7 +271,7 @@ def generate_recommendations_ui(expected_profit, min_sale_probability):
     recommendations = generate_recommendations(expected_profit, min_sale_probability)
     
     if recommendations.empty:
-        return "No recommendations found matching your criteria. Try lowering the minimum sale probability or expected profit."
+        return "No recommendations found matching your criteria. Try lowering the minimum sale probability or expected profit.", pd.DataFrame()
     else:
         return f"Found {len(recommendations)} recommendations!", recommendations
 
@@ -283,16 +300,14 @@ def create_ui():
                 search_button = gr.Button("Search")
                 predict_button = gr.Button("Predict Sale Probability")
             
-            auctions_display = gr.Dataframe(df_auctions.head(100), interactive=False)
+            auctions_display = gr.Dataframe(df_auctions.head(100) if df_auctions is not None else pd.DataFrame(), interactive=False)
             
             def filter_auctions(item_id):
                 if not item_id:
                     return df_auctions.head(100)
-                
                 filtered_df = df_auctions[df_auctions['item_id'] == item_id]
                 display_columns = ['item_id', 'buyout', 'quantity', 'time_left', 'context', 'bonus_lists', 'modifier_types', 'modifier_values', 'first_appearance', 'last_appearance', 'current_hours']
-                return filtered_df[display_columns]
-            
+                return filtered_df[display_columns]            
             def predict_filtered_auctions(item_id):
                 global model, feature_stats, prediction_time
 
@@ -311,9 +326,8 @@ def create_ui():
                     feature_stats
                 )
                 
-                display_columns = ['item_id', 'buyout', 'quantity', 'time_left', 'context', 'bonus_lists', 'modifier_types', 'modifier_values', 'first_appearance', 'last_appearance', 'current_hours', 'prediction', 'sale_probability']
-                return prediction_results[display_columns]
-            
+                display_columns = ['item_id', 'buyout', 'quantity', 'time_left', 'context', 'bonus_lists', 'modifier_types', 'modifier_values', 'first_appearance', 'last_appearance', 'current_hours', 'prediction_q10', 'prediction_q50', 'prediction_q90', 'sale_probability']
+                return prediction_results[display_columns]            
             search_button.click(
                 filter_auctions,
                 inputs=[item_search],
@@ -328,9 +342,16 @@ def create_ui():
         
         with gr.Tab("Recommendations"):
             gr.Markdown("## Auction Recommendations")
+            gr.Markdown("This tab recommends items to flip using their **median price** as the suggested selling price.")
+            gr.Markdown("Only items with potential profit >= your minimum expected profit filter will be shown.")
+            gr.Markdown("**Prediction columns explained:**")
+            gr.Markdown("- **prediction_q10**: 10th percentile prediction (pessimistic - 90% chance it takes longer)")
+            gr.Markdown("- **prediction_q50**: 50th percentile prediction (median)")
+            gr.Markdown("- **prediction_q90**: 90th percentile prediction (optimistic - 90% chance it sells faster)")
+            gr.Markdown("- **sale_probability**: Probability the item will sell")
             
             with gr.Row():
-                expected_profit = gr.Number(label="Expected Profit (gold)", value=100, minimum=0, step=100)
+                expected_profit = gr.Number(label="Minimum Expected Profit Filter (gold)", value=100, minimum=0, step=100)
                 min_sale_probability = gr.Slider(label="Minimum Sale Probability", minimum=0.0, maximum=1.0, value=0.8, step=0.05)
             
             generate_button = gr.Button("Generate Recommendations")
@@ -345,6 +366,11 @@ def create_ui():
         
         with gr.Tab("Individual Flipping"):
             gr.Markdown("## Individual Item Flipping Recommendations")
+            gr.Markdown("**Prediction columns explained:**")
+            gr.Markdown("- **predicted_hours_to_sale**: Median prediction for hours until sale (same as q50)")
+            gr.Markdown("- **predicted_hours_q10**: 10th percentile (optimistic timing)")
+            gr.Markdown("- **predicted_hours_q50**: 50th percentile (median timing)")
+            gr.Markdown("- **predicted_hours_q90**: 90th percentile (pessimistic timing)")
             
             with gr.Row():
                 flip_item_search = gr.Textbox(label="Search by Item ID", placeholder="Enter item ID...")
@@ -364,8 +390,7 @@ def create_ui():
                 
                 filtered_df = df_auctions[df_auctions['item_id'] == item_id]
                 display_columns = ['item_id', 'buyout', 'quantity', 'time_left', 'context', 'bonus_lists', 'modifier_types', 'modifier_values']
-                return filtered_df[display_columns]
-            
+                return filtered_df[display_columns]            
             def predict_item_flip(item_id, custom_price):
                 global model, feature_stats, prediction_time
                 
@@ -407,15 +432,17 @@ def create_ui():
                 result = pd.DataFrame([{
                     'item_id': lowest_auction['item_id'],
                     'quantity': lowest_auction['quantity'],
-                    'original_price': lowest_auction['buyout'],
-                    'custom_price': custom_price,
-                    'potential_profit': custom_price - lowest_auction['buyout'],
-                    'predicted_hours_to_sale': flip_prediction['prediction'],
+                    'original_price': round(lowest_auction['buyout'], 2),
+                    'custom_price': round(custom_price, 2),
+                    'potential_profit': round(custom_price - lowest_auction['buyout'], 2),
+                    'predicted_hours_to_sale': flip_prediction['prediction_q50'],
+                    'predicted_hours_q10': flip_prediction['prediction_q10'],
+                    'predicted_hours_q50': flip_prediction['prediction_q50'],
+                    'predicted_hours_q90': flip_prediction['prediction_q90'],
                     'sale_probability': flip_prediction['sale_probability'],
                 }])
                 
-                return result
-            
+                return result            
             flip_search_button.click(
                 search_item_for_flip,
                 inputs=[flip_item_search],
@@ -431,6 +458,10 @@ def create_ui():
         with gr.Tab("Historical Price Flipping"):
             gr.Markdown("## Historical Price Flipping Recommendations")
             gr.Markdown("This tab recommends items to flip based on their historical median prices from the last 7 days.")
+            gr.Markdown("**Quantile predictions show the uncertainty in sale timing:**")
+            gr.Markdown("- **prediction_q10**: Best case scenario")
+            gr.Markdown("- **prediction_q50**: Most likely scenario (median)")
+            gr.Markdown("- **prediction_q90**: Worst case scenario")
             
             with gr.Row():
                 hist_min_sale_probability = gr.Slider(label="Minimum Sale Probability", minimum=0.0, maximum=1.0, value=0.8, step=0.05)
