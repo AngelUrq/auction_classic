@@ -24,7 +24,6 @@ class AuctionTransformer(L.LightningModule):
         learning_rate: float = 1e-4,
         quantiles: list[float] = [0.1, 0.5, 0.9],
         logging_interval: int = 1000,
-        max_seq_length: int = 64,
         log_raw_batch_data: bool = False,
         log_step_predictions: bool = False,
     ):
@@ -43,10 +42,7 @@ class AuctionTransformer(L.LightningModule):
         self.context_embeddings = nn.Embedding(n_contexts, embedding_dim)
         self.bonus_embeddings = nn.Embedding(n_bonuses, embedding_dim)
         self.modifier_embeddings = nn.Embedding(n_modtypes, embedding_dim)
-        
-        # Learned positional embeddings with max sequence length of max_seq_length
-        self.max_seq_length = max_seq_length
-        self.positional_embeddings = nn.Embedding(self.max_seq_length, d_model)
+        self.hour_of_week_embeddings = nn.Embedding(24 * 7, embedding_dim)
 
         # Item <- Context
         self.context_conditioning = nn.Sequential(
@@ -92,13 +88,14 @@ class AuctionTransformer(L.LightningModule):
         self.quantiles = quantiles
 
     def forward(self, X):
-        (auctions, item_index, contexts, bonus_lists, modifier_types, modifier_values) = X
+        (auctions, item_index, contexts, bonus_lists, modifier_types, modifier_values, hour_of_week) = X
 
         # Base embeddings
         item_embeddings = self.item_embeddings(item_index.long())                   # (B,S,D)
         context_embeddings = self.context_embeddings(contexts.long())               # (B,S,D)
         bonus_embeddings_full = self.bonus_embeddings(bonus_lists.long())           # (B,S,K,D)
         modifier_type_embeddings = self.modifier_embeddings(modifier_types.long())  # (B,S,M,D)
+        hour_of_week_embeddings = self.hour_of_week_embeddings(hour_of_week.long()) # (B,S,D)
 
         # Masks
         attention_mask = (item_index == 0)                                          # (B,S)
@@ -158,21 +155,14 @@ class AuctionTransformer(L.LightningModule):
             + context_embeddings
             + bonus_embeddings_pooled
             + modifier_embeddings_pooled
+            + hour_of_week_embeddings
         )                                                                           # (B,S,D)
 
         # Project auctions + single conditioned item vector
         features = torch.cat([auctions, item_embeddings_conditioned], dim=-1)       # (B,S,input_size + D)
         X = self.input_projection(features)                                         # (B,S,d_model)
         
-        # Add learned positional embeddings
-        batch_size, seq_length = X.shape[:2]
-        seq_length = min(seq_length, self.max_seq_length)  # Ensure we don't exceed max seq length
-        position_ids = torch.arange(seq_length, device=X.device).unsqueeze(0).expand(batch_size, -1)  # (B,S)
-        positional_embeddings = self.positional_embeddings(position_ids)            # (B,S,d_model)
-
-        X = X[:, :seq_length] + positional_embeddings                               # (B,S,d_model)
-        
-        X = self.encoder(X, src_key_padding_mask=attention_mask[:, :seq_length])
+        X = self.encoder(X, src_key_padding_mask=attention_mask)
         X = self.output_projection(X)
 
         return X
@@ -183,7 +173,7 @@ class AuctionTransformer(L.LightningModule):
 
         current_hours = current_hours.unsqueeze(-1)  # (B,S,1) 
         time_left = time_left.unsqueeze(-1)      # (B,S,1)
-        weights = 1.0#torch.exp(-current_hours / 24.0)  # (B, S, 1)
+        weights = torch.exp(-current_hours / 24.0)  # (B, S, 1)
 
         # ----- Pinball loss over all quantiles -----
         quantile_targets = torch.as_tensor(
@@ -322,6 +312,7 @@ class AuctionTransformer(L.LightningModule):
             batch['bonus_lists'], 
             batch['modifier_types'], 
             batch['modifier_values'], 
+            batch['hour_of_week'],
         ))
         
         loss, general_mae, recent_listings_mae, new_listings_mae, mask = self._compute_loss_and_metrics(
@@ -352,6 +343,7 @@ class AuctionTransformer(L.LightningModule):
             batch['bonus_lists'], 
             batch['modifier_types'], 
             batch['modifier_values'],
+            batch['hour_of_week'],
         ))
         
         loss, general_mae, recent_listings_mae, new_listings_mae, mask = self._compute_loss_and_metrics(

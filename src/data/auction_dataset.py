@@ -13,10 +13,6 @@ class AuctionDataset(torch.utils.data.Dataset):
             "quantity": 2,
             "time_left": 3,
             "current_hours": 4,
-            "hour_sin": 5,
-            "hour_cos": 6,
-            "weekday_sin": 7,
-            "weekday_cos": 8,
         }
         self.h5_file = h5py.File(path, "r")
 
@@ -31,6 +27,9 @@ class AuctionDataset(torch.utils.data.Dataset):
         ts = datetime.strptime(pair["record"], "%Y-%m-%d %H:%M:%S")
         item_idx = pair["item_index"]
         g = self.h5_file[f"{ts:%Y-%m-%d}/{ts:%H}/{item_idx}"]
+        
+        # Calculate hour of week (0-167: Mon 0am = 0, Mon 1am = 1, ..., Sun 11pm = 167)
+        hour_of_week = ts.weekday() * 24 + ts.hour  # weekday(): Mon=0, Sun=6
 
         auctions = torch.tensor(g["auctions"][:], dtype=torch.float32)
         contexts = torch.tensor(g["contexts"][:], dtype=torch.int32)
@@ -42,19 +41,6 @@ class AuctionDataset(torch.utils.data.Dataset):
         hours_on_sale = auctions[:, -1]
         auctions = auctions[:, :-1]
 
-        # Add space for hour_sin, hour_cos, weekday_sin, and weekday_cos features
-        auctions = torch.cat([
-            auctions,
-            torch.zeros((auctions.size(0), 4))
-        ], dim=1)
-
-        hour_angle = 2 * np.pi * ts.hour / 24
-        auctions[:, self.column_map["hour_sin"]] = np.sin(hour_angle)
-        auctions[:, self.column_map["hour_cos"]] = np.cos(hour_angle)
-        weekday_angle = 2 * np.pi * ts.weekday() / 7
-        auctions[:, self.column_map["weekday_sin"]] = np.sin(weekday_angle)
-        auctions[:, self.column_map["weekday_cos"]] = np.cos(weekday_angle)
-
         auctions[:, self.column_map["bid"]] = torch.log1p(auctions[:, self.column_map["bid"]])
         auctions[:, self.column_map["buyout"]] = torch.log1p(auctions[:, self.column_map["buyout"]])
         modifier_values = torch.log1p(modifier_values)
@@ -63,10 +49,11 @@ class AuctionDataset(torch.utils.data.Dataset):
         time_left_raw = auctions[:, self.column_map["time_left"]].clone()
 
         if self.feature_stats is not None:
-            auctions = (auctions - self.feature_stats["means"]) / (self.feature_stats["stds"] + 1e-6)
+            auctions = (auctions - self.feature_stats["means"][:5]) / (self.feature_stats["stds"][:5] + 1e-6)
             modifier_values = (modifier_values - self.feature_stats["modifiers_mean"]) / (self.feature_stats["modifiers_std"] + 1e-6)
 
         item_index_tensor = torch.tensor(item_idx, dtype=torch.int32).repeat(auctions.size(0))
+        hour_of_week_tensor = torch.tensor(hour_of_week, dtype=torch.int32).repeat(auctions.size(0))
         y = hours_on_sale
 
         return {
@@ -76,6 +63,7 @@ class AuctionDataset(torch.utils.data.Dataset):
             'bonus_lists': bonus_lists,
             'modifier_types': modifier_types,
             'modifier_values': modifier_values,
+            'hour_of_week': hour_of_week_tensor,
             'current_hours_raw': current_hours_raw,
             'time_left_raw': time_left_raw,
             'buyout_rank': buyout_rank,

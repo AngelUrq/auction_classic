@@ -49,6 +49,7 @@ def collate_auctions(batch):
     current_hours = [item['current_hours_raw'] for item in batch]
     time_left = [item['time_left_raw'] for item in batch]
     buyout_ranking = [item['buyout_rank'] for item in batch]
+    hour_of_week = [item['hour_of_week'] for item in batch]
     targets = [item['target'] for item in batch]
 
     # Pad all tensors to max size
@@ -61,6 +62,7 @@ def collate_auctions(batch):
     buyout_ranking = pad_tensors_to_max_size(buyout_ranking)
     current_hours = pad_tensors_to_max_size(current_hours)
     time_left = pad_tensors_to_max_size(time_left)
+    hour_of_week = pad_tensors_to_max_size(hour_of_week)
     targets = pad_tensors_to_max_size(targets)
 
     # Return as dictionary for consistency
@@ -74,6 +76,7 @@ def collate_auctions(batch):
         'current_hours_raw': current_hours,
         'time_left_raw': time_left,
         'buyout_rank': buyout_ranking,
+        'hour_of_week': hour_of_week,
         'target': targets
     }
 

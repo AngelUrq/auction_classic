@@ -10,6 +10,8 @@ __pycache__/
 *.xlsx
 
 data/tww/
+notebooks/wandb/
+.gradio/
 
 .vscode/
 
