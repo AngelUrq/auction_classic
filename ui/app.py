@@ -24,6 +24,8 @@ model = None
 feature_stats = None
 prediction_time = None
 recommendations = None
+ckpt_path = 'models/auction-transformer-quantile/epoch_epoch=01.ckpt'
+max_hours_back = 24
 
 
 def load_data_and_model():
@@ -54,7 +56,11 @@ def load_data_and_model():
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     
     prediction_time = datetime.now()
-    prediction_time = prediction_time.replace(minute=0, second=0, microsecond=0)
+
+    import pytz
+    prediction_time = prediction_time.replace(minute=0, second=0, microsecond=0, tzinfo=pytz.timezone('Europe/Berlin'))
+
+    print(f'Prediction time: {prediction_time}')
 
     mappings_dir = os.path.join(base_path, 'generated/mappings')
 
@@ -75,7 +81,7 @@ def load_data_and_model():
     feature_stats = torch.load(os.path.join(base_path, 'generated/feature_stats.pt'))
 
     model = AuctionTransformer.load_from_checkpoint(
-        os.path.join(base_path, 'models/auction-transformer-quantile/epoch_epoch=01.ckpt'),
+        os.path.join(base_path, ckpt_path),
         map_location=device
     )
 
@@ -91,7 +97,8 @@ def load_data_and_model():
         context_to_idx, 
         bonus_to_idx, 
         modtype_to_idx, 
-        last_days=7
+        max_hours_back=max_hours_back,
+        include_targets=False
     )
     df_auctions['item_id'] = df_auctions['item_index'].map(idx_to_item)
 

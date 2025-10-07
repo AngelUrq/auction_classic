@@ -26,6 +26,7 @@ class AuctionTransformer(L.LightningModule):
         logging_interval: int = 1000,
         log_raw_batch_data: bool = False,
         log_step_predictions: bool = False,
+        max_hours_back: int = 0,
     ):
         super().__init__()
 
@@ -43,6 +44,7 @@ class AuctionTransformer(L.LightningModule):
         self.bonus_embeddings = nn.Embedding(n_bonuses, embedding_dim)
         self.modifier_embeddings = nn.Embedding(n_modtypes, embedding_dim)
         self.hour_of_week_embeddings = nn.Embedding(24 * 7, embedding_dim)
+        self.time_offset_embeddings = nn.Embedding(max_hours_back + 1, embedding_dim)
 
         # Item <- Context
         self.context_conditioning = nn.Sequential(
@@ -88,7 +90,7 @@ class AuctionTransformer(L.LightningModule):
         self.quantiles = quantiles
 
     def forward(self, X):
-        (auctions, item_index, contexts, bonus_lists, modifier_types, modifier_values, hour_of_week) = X
+        (auctions, item_index, contexts, bonus_lists, modifier_types, modifier_values, hour_of_week, time_offset) = X
 
         # Base embeddings
         item_embeddings = self.item_embeddings(item_index.long())                   # (B,S,D)
@@ -96,6 +98,7 @@ class AuctionTransformer(L.LightningModule):
         bonus_embeddings_full = self.bonus_embeddings(bonus_lists.long())           # (B,S,K,D)
         modifier_type_embeddings = self.modifier_embeddings(modifier_types.long())  # (B,S,M,D)
         hour_of_week_embeddings = self.hour_of_week_embeddings(hour_of_week.long()) # (B,S,D)
+        time_offset_embeddings = self.time_offset_embeddings(time_offset.long())    # (B,S,D)
 
         # Masks
         attention_mask = (item_index == 0)                                          # (B,S)
@@ -156,6 +159,7 @@ class AuctionTransformer(L.LightningModule):
             + bonus_embeddings_pooled
             + modifier_embeddings_pooled
             + hour_of_week_embeddings
+            + time_offset_embeddings
         )                                                                           # (B,S,D)
 
         # Project auctions + single conditioned item vector
@@ -167,9 +171,13 @@ class AuctionTransformer(L.LightningModule):
 
         return X
 
-    def _compute_loss_and_metrics(self, y_hat, y, item_index, current_hours, time_left):
+    def _compute_loss_and_metrics(self, y_hat, y, item_index, current_hours, time_left, time_offset):
         """Compute loss and metrics for both training and validation."""
         item_mask = (item_index != 0).float().unsqueeze(-1) # (B,S,1)
+        
+        # Only compute loss for current auctions (time_offset == 0)
+        current_auctions_mask = (time_offset == 0).float().unsqueeze(-1) # (B,S,1)
+        loss_mask = item_mask * current_auctions_mask # (B,S,1)
 
         current_hours = current_hours.unsqueeze(-1)  # (B,S,1) 
         time_left = time_left.unsqueeze(-1)      # (B,S,1)
@@ -186,23 +194,23 @@ class AuctionTransformer(L.LightningModule):
             (quantile_targets - 1.0) * prediction_errors
         )  # (B, S, Q)
 
-        pinball_loss = (quantile_losses * item_mask * weights).sum() / (item_mask * weights).sum().clamp_min(1e-6)
+        pinball_loss = (quantile_losses * loss_mask * weights).sum() / (loss_mask * weights).sum().clamp_min(1e-6)
 
         # ----- Metrics computed on the median (tau=0.5) channel -----
         median_index = self.quantiles.index(0.5)
         median_predictions = y_hat[..., median_index]  # (B, S)
 
         with torch.no_grad():
-            # General MAE (in hours)
-            valid_items_sum = item_mask.sum().clamp_min(1e-6)
+            # General MAE (in hours) - only for current auctions
+            valid_items_sum = loss_mask.sum().clamp_min(1e-6)
             general_mae = torch.nn.functional.l1_loss(
-                median_predictions.unsqueeze(-1) * item_mask,
-                y.unsqueeze(-1)                  * item_mask,
+                median_predictions.unsqueeze(-1) * loss_mask,
+                y.unsqueeze(-1)                  * loss_mask,
                 reduction='sum'
             ) / valid_items_sum
 
-            # Recent listings: current_hours <= 12 and full duration == 48
-            recent_mask = item_mask * (current_hours <= 12.0).float() * (time_left == 48.0).float()
+            # Recent listings: current_hours <= 12 and full duration == 48 - only for current auctions
+            recent_mask = loss_mask * (current_hours <= 12.0).float() * (time_left == 48.0).float()
             recent_items_sum = recent_mask.sum().clamp_min(1e-6)
             recent_listings_mae = torch.nn.functional.l1_loss(
                 median_predictions.unsqueeze(-1) * recent_mask,
@@ -210,8 +218,8 @@ class AuctionTransformer(L.LightningModule):
                 reduction='sum'
             ) / recent_items_sum
 
-            # Brand new listings: current_hours == 0
-            new_mask = item_mask * (current_hours == 0.0).float()
+            # Brand new listings: current_hours == 0 - only for current auctions
+            new_mask = loss_mask * (current_hours == 0.0).float() * (time_left == 48.0).float()
             new_items_sum = new_mask.sum().clamp_min(1e-6)
             new_listings_mae = torch.nn.functional.l1_loss(
                 median_predictions.unsqueeze(-1) * new_mask,
@@ -219,7 +227,7 @@ class AuctionTransformer(L.LightningModule):
                 reduction='sum'
             ) / new_items_sum
 
-        return pinball_loss, general_mae, recent_listings_mae, new_listings_mae, item_mask
+        return pinball_loss, general_mae, recent_listings_mae, new_listings_mae, loss_mask
         
     def _compute_gradient_norm(self):
         """Compute the total gradient norm across all parameters."""
@@ -313,10 +321,11 @@ class AuctionTransformer(L.LightningModule):
             batch['modifier_types'], 
             batch['modifier_values'], 
             batch['hour_of_week'],
+            batch['time_offset'],
         ))
         
         loss, general_mae, recent_listings_mae, new_listings_mae, mask = self._compute_loss_and_metrics(
-            y_hat, batch['target'], batch['item_index'], batch['current_hours_raw'], batch['time_left_raw']
+            y_hat, batch['target'], batch['item_index'], batch['current_hours_raw'], batch['time_left_raw'], batch['time_offset']
         )
 
         self._log_metrics('train', loss, general_mae, recent_listings_mae, new_listings_mae)
@@ -344,10 +353,11 @@ class AuctionTransformer(L.LightningModule):
             batch['modifier_types'], 
             batch['modifier_values'],
             batch['hour_of_week'],
+            batch['time_offset'],
         ))
         
         loss, general_mae, recent_listings_mae, new_listings_mae, mask = self._compute_loss_and_metrics(
-            y_hat, batch['target'], batch['item_index'], batch['current_hours_raw'], batch['time_left_raw']
+            y_hat, batch['target'], batch['item_index'], batch['current_hours_raw'], batch['time_left_raw'], batch['time_offset']
         )
 
         self._log_metrics('val', loss, general_mae, recent_listings_mae, new_listings_mae)

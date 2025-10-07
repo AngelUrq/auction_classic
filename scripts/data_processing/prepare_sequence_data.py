@@ -13,6 +13,9 @@ time_left_to_int = {
     'SHORT': 0.5
 }
 
+MAX_BONUSES = 9
+MAX_MODIFIERS = 11
+
 exclude_first_times = [
     '09-03-2025', # we should exclude items that appeared in the first two days
     '10-03-2025',
@@ -23,33 +26,17 @@ exclude_first_times = [
     '26-03-2025',
     '20-08-2025',
     '21-08-2025',
-    '22-08-2025',
+    '22-08-2025', # we should exclude items that appeared in the last day and all after that
 ]
 
-def pad_sequence(sequences, padding_value=0):
-    sequences_np = [np.array(seq) for seq in sequences]
-    
-    # Find the max length among all sequences
-    max_length = max(len(seq) for seq in sequences_np)
-    
-    # Get the shape of each sequence (excluding the length dimension)
-    sample_shape = sequences_np[0].shape[1:] if len(sequences_np[0].shape) > 1 else ()
-
-    # Create the output padded array
-    padded_sequences = np.full((len(sequences_np), max_length) + sample_shape, padding_value, dtype=np.float32)
-    
-    # Fill in the actual sequences
-    for i, seq in enumerate(sequences_np):
-        length = len(seq)
-        padded_sequences[i, :length] = seq
-            
-    return padded_sequences
+# Use the last date in the exclude_first_times array
+last_exclude_date = datetime.strptime(exclude_first_times[-1], '%d-%m-%Y')
 
 def process_auctions(args):
     print('Processing auctions...')
     file_info = {}
     data_dir = args.data_dir
-    h5_filename = 'sequences2.h5'
+    h5_filename = 'sequences.h5'
     mappings_dir = args.mappings_dir
 
     with open(args.timestamps, 'r') as f:
@@ -78,25 +65,12 @@ def process_auctions(args):
     total_files = len(file_info)
     print(f'Processing all {total_files} files')
 
-    parquet_file_path = os.path.join(args.output_dir, 'auction_indices.parquet')
-    if not os.path.exists(parquet_file_path):
-        print('Creating auction_indices.parquet')
-        # Create empty DataFrame with the required columns
-        columns = [
-            'record', 
-            'item_index', 
-            'g_hours_on_sale_len',
-            'g_hours_on_sale_mean',
-            'g_hours_on_sale_std',
-            'g_hours_on_sale_min',
-            'g_hours_on_sale_max',
-            'g_current_hours_mean',
-            'g_current_hours_std',
-            'g_current_hours_min',
-            'g_current_hours_max'
-        ]
-        empty_df = pd.DataFrame(columns=columns)
-        empty_df.to_parquet(parquet_file_path, index=False)
+    csv_file_path = os.path.join(args.output_dir, 'indices.csv')
+    parquet_file_path = os.path.join(args.output_dir, 'indices.parquet')
+    
+    # Remove existing CSV file to start fresh
+    if os.path.exists(csv_file_path):
+        os.remove(csv_file_path)
 
     if not os.path.exists(os.path.join(args.output_dir, h5_filename)):
         print(f'Creating {h5_filename}')
@@ -105,6 +79,13 @@ def process_auctions(args):
             pass
 
     for filepath in tqdm(list(file_info.keys())):
+        prediction_time = file_info[filepath]
+        
+        # Skip files that come after the last exclude date
+        if prediction_time.date() > last_exclude_date.date() or prediction_time.strftime('%d-%m-%Y') in exclude_first_times:
+            print(f'Skipping {filepath}')
+            continue
+            
         with open(filepath, 'r') as f:
             try:
                 json_data = json.load(f)
@@ -119,10 +100,7 @@ def process_auctions(args):
         prediction_time = file_info[filepath]
         auctions_by_item = {}
         auction_indices = []
-
-        if prediction_time.strftime('%d-%m-%Y') in exclude_first_times:
-            continue
-
+        
         for auction in auctions:
             auction_id = str(auction['id'])
             item_index = item_to_idx[str(auction['item']['id'])]
@@ -131,15 +109,11 @@ def process_auctions(args):
             time_left = auction['time_left']
             quantity = auction['quantity']
             context = context_to_idx[str(auction['item'].get('context', 0))]
-            bonus_lists = [bonus_to_idx[str(bonus)] for bonus in auction['item'].get('bonus_lists', [])]
-            modifiers = auction['item'].get('modifiers', [])
+            bonus_lists = [bonus_to_idx[str(bonus)] for bonus in auction['item'].get('bonus_lists', [])][:MAX_BONUSES]
+            modifiers = auction['item'].get('modifiers', [])[:MAX_MODIFIERS]
 
-            modifier_types = []
-            modifier_values = []
-
-            for modifier in modifiers:
-                modifier_types.append(modtype_to_idx[str(modifier['type'])])
-                modifier_values.append(modifier['value'])
+            modifier_types = [modtype_to_idx[str(modifier['type'])] for modifier in modifiers]
+            modifier_values = [modifier['value'] for modifier in modifiers]
 
             if 'pet_species_id' in auction['item']:
                 continue
@@ -172,8 +146,28 @@ def process_auctions(args):
             group_path = f"{prediction_time.strftime('%Y-%m-%d')}/{prediction_time.strftime('%H')}"
             if group_path not in h5_file:
                 h5_file.create_group(group_path)
+            
+            # Check if this time/hour group already exists
+            if 'data' in h5_file[group_path]:
+                print(f"Group {group_path} already exists. Skipping.")
+                continue
                 
-            for item_index, all_auctions in auctions_by_item.items():
+            # Sort items by item_index for consistent ordering
+            sorted_items = sorted(auctions_by_item.items())
+            
+            # Concatenate all auctions across all items
+            all_auctions_list = []
+            all_contexts_list = []
+            all_bonus_lists = []
+            all_modifier_types = []
+            all_modifier_values = []
+            
+            # Track row splits using CSR/indptr format (1-D prefix sum)
+            row_splits = [0]  # Start with 0
+            sorted_item_ids = []
+            
+            for item_index, all_auctions in sorted_items:
+                # Calculate statistics for this item
                 item_hours_on_sale = np.array([auction[5] for auction in all_auctions])
                 item_current_hours = np.array([auction[4] for auction in all_auctions])
 
@@ -201,35 +195,90 @@ def process_auctions(args):
                     group_current_hours_min,
                     group_current_hours_max
                 ))
-                                
-                dataset_name = f'{item_index}'
-                if dataset_name in h5_file[group_path]:
-                    print(f"Dataset {dataset_name} already exists in file {group_path}. Skipping.")
-                    continue
-
-                auctions = np.array([auction[:6] for auction in all_auctions])
-                contexts = np.array([auction[6] for auction in all_auctions])
-                bonus_lists = pad_sequence([auction[7] for auction in all_auctions])
-                modifier_types = pad_sequence([auction[8] for auction in all_auctions])
-                modifier_values = pad_sequence([auction[9] for auction in all_auctions])
                 
-                buyout_prices = auctions[:, 1] 
+                # Add to concatenated lists
+                auctions_data = np.array([auction[:6] for auction in all_auctions])
+                contexts_data = np.array([auction[6] for auction in all_auctions])
                 
-                buyout_for_ranking = np.copy(buyout_prices)
-                buyout_for_ranking[buyout_for_ranking == 0] = np.inf
+                # Create fixed-size arrays directly
+                bonus_sequences = [auction[7] for auction in all_auctions]
+                modifier_type_sequences = [auction[8] for auction in all_auctions]
+                modifier_value_sequences = [auction[9] for auction in all_auctions]
+                
+                bonus_lists_data = np.array([np.pad(seq, (0, max(0, MAX_BONUSES - len(seq))), 'constant')[:MAX_BONUSES] for seq in bonus_sequences])
+                modifier_types_data = np.array([np.pad(seq, (0, max(0, MAX_MODIFIERS - len(seq))), 'constant')[:MAX_MODIFIERS] for seq in modifier_type_sequences])
+                modifier_values_data = np.array([np.pad(seq, (0, max(0, MAX_MODIFIERS - len(seq))), 'constant')[:MAX_MODIFIERS] for seq in modifier_value_sequences])
+                
+                all_auctions_list.append(auctions_data)
+                all_contexts_list.append(contexts_data)
+                all_bonus_lists.append(bonus_lists_data)
+                all_modifier_types.append(modifier_types_data)
+                all_modifier_values.append(modifier_values_data)
+                
+                # Record row split using CSR format (cumulative sum)
+                num_auctions = len(all_auctions)
+                row_splits.append(row_splits[-1] + num_auctions)
+                sorted_item_ids.append(item_index)
             
-                unique_buyouts = np.unique(buyout_for_ranking[buyout_for_ranking != np.inf])
-                buyout_ranking = np.zeros_like(buyout_prices, dtype=int)
+            # Concatenate all data
+            if all_auctions_list:
+                concatenated_data = np.concatenate(all_auctions_list, axis=0)
+                concatenated_contexts = np.concatenate(all_contexts_list, axis=0)
+                concatenated_bonus_lists = np.concatenate(all_bonus_lists, axis=0)
+                concatenated_modifier_types = np.concatenate(all_modifier_types, axis=0)
+                concatenated_modifier_values = np.concatenate(all_modifier_values, axis=0)
                 
-                for i, price in enumerate(unique_buyouts, 1):
-                    buyout_ranking[buyout_for_ranking == price] = i
+                # Determine chunking parameters
+                total_rows = concatenated_data.shape[0]
+                rows_chunk = min(4096, total_rows)  # Use 4096 or total rows if smaller
                 
-                h5_file[group_path].create_dataset(f'{dataset_name}/auctions', data=auctions)
-                h5_file[group_path].create_dataset(f'{dataset_name}/contexts', data=contexts)
-                h5_file[group_path].create_dataset(f'{dataset_name}/bonus_lists', data=bonus_lists)
-                h5_file[group_path].create_dataset(f'{dataset_name}/modifier_types', data=modifier_types)
-                h5_file[group_path].create_dataset(f'{dataset_name}/modifier_values', data=modifier_values)
-                h5_file[group_path].create_dataset(f'{dataset_name}/buyout_ranking', data=buyout_ranking)
+                # Store concatenated data with compression and chunking
+                # Big row-major arrays with compression
+                h5_file[group_path].create_dataset(
+                    'data', 
+                    data=concatenated_data,
+                    compression='lzf',
+                    chunks=(rows_chunk, concatenated_data.shape[1])
+                )
+                h5_file[group_path].create_dataset(
+                    'contexts', 
+                    data=concatenated_contexts,
+                    compression='lzf',
+                    chunks=(rows_chunk,)
+                )
+                h5_file[group_path].create_dataset(
+                    'bonus_lists', 
+                    data=concatenated_bonus_lists,
+                    compression='lzf',
+                    chunks=(rows_chunk, concatenated_bonus_lists.shape[1])
+                )
+                h5_file[group_path].create_dataset(
+                    'modifier_types', 
+                    data=concatenated_modifier_types,
+                    compression='lzf',
+                    chunks=(rows_chunk, concatenated_modifier_types.shape[1])
+                )
+                h5_file[group_path].create_dataset(
+                    'modifier_values', 
+                    data=concatenated_modifier_values,
+                    compression='lzf',
+                    chunks=(rows_chunk, concatenated_modifier_values.shape[1])
+                )
+                
+                # Store row splits (CSR format) and sorted item IDs with light compression
+                # Small index arrays
+                h5_file[group_path].create_dataset(
+                    'row_splits', 
+                    data=np.array(row_splits, dtype=np.int32),
+                    compression='lzf',
+                    chunks=(len(row_splits),)
+                )
+                h5_file[group_path].create_dataset(
+                    'item_ids', 
+                    data=np.array(sorted_item_ids, dtype=np.int32),
+                    compression='lzf',
+                    chunks=(len(sorted_item_ids),)
+                )
 
         if auction_indices:
             new_df = pd.DataFrame(auction_indices, columns=[
@@ -246,13 +295,16 @@ def process_auctions(args):
                 'g_current_hours_max'
             ])
             
-            parquet_file_path = os.path.join(args.output_dir, 'indices.parquet')
-            if os.path.exists(parquet_file_path):
-                existing_df = pd.read_parquet(parquet_file_path)
-                combined_df = pd.concat([existing_df, new_df], ignore_index=True)
-                combined_df.to_parquet(parquet_file_path, index=False)
-            else:
-                new_df.to_parquet(parquet_file_path, index=False)
+            # Append to CSV file (creates header on first write)
+            new_df.to_csv(csv_file_path, mode='a', header=not os.path.exists(csv_file_path), index=False)
+    
+    # Convert CSV to parquet at the end
+    if os.path.exists(csv_file_path):
+        print('Converting CSV to parquet...')
+        final_df = pd.read_csv(csv_file_path)
+        final_df.to_parquet(parquet_file_path, index=False)
+        os.remove(csv_file_path)  # Clean up CSV file
+        print(f'Created {parquet_file_path} with {len(final_df)} records')
             
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Check JSON files in auctions folder')

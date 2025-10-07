@@ -48,8 +48,8 @@ def collate_auctions(batch):
     modifier_values = [item['modifier_values'] for item in batch]
     current_hours = [item['current_hours_raw'] for item in batch]
     time_left = [item['time_left_raw'] for item in batch]
-    buyout_ranking = [item['buyout_rank'] for item in batch]
     hour_of_week = [item['hour_of_week'] for item in batch]
+    time_offset = [item['time_offset'] for item in batch]
     targets = [item['target'] for item in batch]
 
     # Pad all tensors to max size
@@ -59,10 +59,10 @@ def collate_auctions(batch):
     bonus_lists = pad_tensors_to_max_size(bonus_lists)
     modifier_types = pad_tensors_to_max_size(modifier_types)
     modifier_values = pad_tensors_to_max_size(modifier_values)
-    buyout_ranking = pad_tensors_to_max_size(buyout_ranking)
     current_hours = pad_tensors_to_max_size(current_hours)
     time_left = pad_tensors_to_max_size(time_left)
     hour_of_week = pad_tensors_to_max_size(hour_of_week)
+    time_offset = pad_tensors_to_max_size(time_offset)
     targets = pad_tensors_to_max_size(targets)
 
     # Return as dictionary for consistency
@@ -75,8 +75,8 @@ def collate_auctions(batch):
         'modifier_values': modifier_values,
         'current_hours_raw': current_hours,
         'time_left_raw': time_left,
-        'buyout_rank': buyout_ranking,
         'hour_of_week': hour_of_week,
+        'time_offset': time_offset,
         'target': targets
     }
 
@@ -133,116 +133,139 @@ def get_current_auctions(config):
     
     return data
 
-def load_auctions_from_sample(data_dir, prediction_time, time_left_mapping, item_to_idx, context_to_idx, bonus_to_idx, modtype_to_idx, last_days=None):
+def load_auctions_from_sample(
+    data_dir,
+    prediction_time,
+    time_left_mapping,
+    item_to_idx,
+    context_to_idx,
+    bonus_to_idx,
+    modtype_to_idx,
+    max_hours_back=0,
+    include_targets=True
+):
+    # ---- define window ----
+    past_hours = 48 + max_hours_back
+    future_hours = 48 + max_hours_back if include_targets else 0
+    window_start = prediction_time - timedelta(hours=past_hours)
+    window_end = prediction_time + timedelta(hours=future_hours)
+
+    # ---- collect files in window (sorted) ----
     file_info = {}
-    auction_appearances = {}
-
     for root, dirs, files in os.walk(data_dir):
-        for filename in tqdm(files):
-            filepath = os.path.join(root, filename)
-            date = datetime.strptime(filename.split('.')[0], '%Y%m%dT%H')
-
-            if last_days and prediction_time is not None:
-                if date < prediction_time - timedelta(days=last_days):
-                    continue
-                    
-            file_info[filepath] = date
-
-    file_info = {k: v for k, v in sorted(file_info.items(), key=lambda item: item[1])}
-    
-    raw_auctions = []
-    
-    for filepath in list(file_info.keys()):
-        print(filepath)
-        with open(filepath, 'r') as f:
+        for filename in files:
             try:
+                ts = datetime.strptime(filename.split('.')[0], '%Y%m%dT%H')
+            except Exception:
+                continue
+            if window_start <= ts <= window_end:
+                file_info[os.path.join(root, filename)] = ts
+    file_info = {k: v for k, v in sorted(file_info.items(), key=lambda it: it[1])}
+
+    # ---- PASS 1: track first/last appearance per auction ----
+    auction_appearances = {}
+    for filepath, snapshot_time in tqdm(list(file_info.items()), desc="Pass 1/2: appearances"):
+        try:
+            with open(filepath, 'r') as f:
                 json_data = json.load(f)
-                
-                if 'auctions' not in json_data:
-                    print(f"File {filepath} does not contain 'auctions' key, skipping.")
-                    continue
-                
-                auction_data = json_data['auctions']
-                timestamp = file_info[filepath]
-                
-                for auction in auction_data:
-                    auction_id = auction['id']
+        except Exception:
+            continue
 
-                    if auction_id not in auction_appearances:
-                        auction_appearances[auction_id] = {'first': timestamp, 'last': timestamp}
-                    else:
-                        auction_appearances[auction_id]['last'] = timestamp
-                
-                if prediction_time is not None:
-                    if timestamp == prediction_time:
-                        raw_auctions.extend(auction_data)
-                else:
-                    raw_auctions.extend(auction_data)
-
-            except json.JSONDecodeError as e:
-                print(f"Error loading file {filepath}: {e}")
+        for auction in json_data.get('auctions', []):
+            if 'pet_species_id' in auction.get('item', {}):
                 continue
-            except Exception as e:
-                print(f"Unexpected error loading file {filepath}: {e}")
+            auction_id = auction.get('id')
+            if auction_id is None:
                 continue
 
-    auctions = []
-    for auction in tqdm(raw_auctions):
-        try: 
-            first_appearance = auction_appearances[auction['id']]['first']
-            last_appearance = auction_appearances[auction['id']]['last']
+            if auction_id not in auction_appearances:
+                auction_appearances[auction_id] = {'first': snapshot_time, 'last': snapshot_time}
+            else:
+                auction_appearances[auction_id]['last'] = snapshot_time
 
-            auction_id = auction['id']
+    # ---- PASS 2: build rows while reading one file at a time ----
+    rows = []
+    for filepath, snapshot_time in tqdm(list(file_info.items()), desc="Pass 2/2: rows"):
+        try:
+            with open(filepath, 'r') as f:
+                json_data = json.load(f)
+        except Exception:
+            continue
+
+        for auction in json_data.get('auctions', []):
+            if 'pet_species_id' in auction.get('item', {}):
+                continue
+            auction_id = auction.get('id')
+            if auction_id is None:
+                continue
+
             item_id = auction['item']['id']
             item_index = item_to_idx.get(str(item_id), 1)
+
             bid = auction.get('bid', 0) / 10000.0
-            buyout = auction['buyout'] / 10000.0
-            quantity = auction['quantity']
-            time_left = time_left_mapping[auction['time_left']]
-            context = context_to_idx[str(auction['item'].get('context', 0))]
-            bonus_lists = [bonus_to_idx.get(str(bonus), 1) for bonus in auction['item'].get('bonus_lists', [])]
-            modifiers = auction['item'].get('modifiers', [])
+            buyout = auction.get('buyout', 0) / 10000.0
+            quantity = auction.get('quantity', 1)
+
+            time_left_key = auction.get('time_left')
+            time_left = time_left_mapping.get(time_left_key, 0.0)
+
+            context = context_to_idx.get(str(auction['item'].get('context', 0)), 1)
+            bonus_lists = [bonus_to_idx.get(str(b), 1) for b in auction['item'].get('bonus_lists', [])]
 
             modifier_types = []
             modifier_values = []
+            for modifier in auction['item'].get('modifiers', []):
+                modifier_types.append(modtype_to_idx.get(str(modifier.get('type')), 1))
+                modifier_values.append(modifier.get('value', 0))
 
-            for modifier in modifiers:
-                modifier_types.append(modtype_to_idx[str(modifier['type'])])
-                modifier_values.append(modifier['value'])
+            first_appearance = auction_appearances[auction_id]['first']
+            last_appearance = auction_appearances[auction_id]['last']
 
-            if 'pet_species_id' in auction['item']:
-                continue
+            current_hours = (snapshot_time - first_appearance).total_seconds() / 3600.0
+            if include_targets:
+                hours_on_sale = (last_appearance - snapshot_time).total_seconds() / 3600.0
 
-            first_appearance = first_appearance.strftime('%Y-%m-%d %H:%M:%S')
-            last_appearance = last_appearance.strftime('%Y-%m-%d %H:%M:%S')
+            time_offset = int((prediction_time - snapshot_time).total_seconds() // 3600)  # negative if future
+            hour_of_week = snapshot_time.weekday() * 24 + snapshot_time.hour  # 0..167
 
-            auctions.append([
-                auction_id,
-                item_index,
-                bid,
-                buyout,
-                quantity,
-                time_left,
-                context,
-                bonus_lists,
-                    modifier_types,
-                    modifier_values,
-                    first_appearance,
-                    last_appearance
+            if include_targets:
+                rows.append([
+                    auction_id, item_index, bid, buyout, quantity, time_left, context,
+                    bonus_lists, modifier_types, modifier_values,
+                    snapshot_time, time_offset, hour_of_week, current_hours, hours_on_sale
                 ])
-        except Exception as e:
-            print(f"Unexpected error processing auction {auction['id']}: {e}")
-            continue
-        
-    df_auctions = pd.DataFrame(auctions, columns=['id', 'item_index', 'bid', 'buyout', 'quantity', 'time_left', 'context', 'bonus_lists', 'modifier_types', 'modifier_values', 'first_appearance', 'last_appearance'])
-    df_auctions['first_appearance'] = pd.to_datetime(df_auctions['first_appearance'])
-    df_auctions['last_appearance'] = pd.to_datetime(df_auctions['last_appearance'])
+            else:
+                rows.append([
+                    auction_id, item_index, bid, buyout, quantity, time_left, context,
+                    bonus_lists, modifier_types, modifier_values,
+                    snapshot_time, time_offset, hour_of_week, current_hours
+                ])
 
-    df_auctions = df_auctions[(df_auctions['first_appearance'] <= prediction_time) & (df_auctions['last_appearance'] >= prediction_time)]
+    if include_targets:
+        df_auctions = pd.DataFrame(
+            rows,
+            columns=[
+                'id','item_index','bid','buyout','quantity','time_left','context',
+                'bonus_lists','modifier_types','modifier_values',
+                'snapshot_time','time_offset','hour_of_week','current_hours','hours_on_sale'
+            ]
+        )
+    else:
+        df_auctions = pd.DataFrame(
+            rows,
+            columns=[
+                'id','item_index','bid','buyout','quantity','time_left','context',
+                'bonus_lists','modifier_types','modifier_values',
+                'snapshot_time','time_offset','hour_of_week','current_hours'
+            ]
+        )
 
-    print(f'Processing {len(df_auctions)} auctions')
+    if not df_auctions.empty:
+        df_auctions = df_auctions.sort_values(['snapshot_time', 'item_index', 'id']).reset_index(drop=True)
 
-    df_auctions['current_hours'] = (prediction_time - df_auctions['first_appearance']).dt.total_seconds() / 3600
-    df_auctions['hours_on_sale'] = (df_auctions['last_appearance'] - prediction_time).dt.total_seconds() / 3600
+    print(
+        f'Built dataframe with {len(df_auctions)} rows from {len(file_info)} snapshots '
+        f'[{window_start:%Y-%m-%d %H}:00, {window_end:%Y-%m-%d %H}:00], include_targets={include_targets}'
+    )
 
     return df_auctions

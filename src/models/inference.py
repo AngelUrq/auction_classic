@@ -3,93 +3,115 @@ import numpy as np
 import pandas as pd
 from tqdm import tqdm
 import torch.nn.functional as F
-from src.data.utils import pad_tensors_to_max_size
 
 
-@torch.no_grad()
-def predict_dataframe(model, df_auctions, prediction_time, feature_stats, lambda_value = 0.0401):
+MAX_BONUSES = 9
+MAX_MODIFIERS = 11
+
+def predict_dataframe(model, df_auctions, prediction_time, feature_stats, lambda_value = 0.0401, max_hours_back = 0):
     model.eval()
 
-    grouped = {idx: df for idx, df in df_auctions.groupby("item_index")}
+    # only use rows the model can embed (context 0..max_hours_back in the past)
+    df = df_auctions[(df_auctions["time_offset"] >= 0) & (df_auctions["time_offset"] <= max_hours_back)].copy()
 
-    df_out = df_auctions.copy()
-    df_out["prediction_q10"] = 0.0
-    df_out["prediction_q50"] = 0.0
-    df_out["prediction_q90"] = 0.0
-    df_out["sale_probability"] = 0.0
+    # sort by id and time_offset
+    #df.sort_values(["id", "time_offset"], inplace=True)
+    #df.to_csv("df_auctions.csv", index=False)
+
+    # sequences per auction id (history of a single listing)
+    grouped = {idx: g for idx, g in df.groupby("item_index")}
+
+    df_out = df.copy()
+    df_out["prediction_q10"] = np.nan
+    df_out["prediction_q50"] = np.nan
+    df_out["prediction_q90"] = np.nan
+    df_out["sale_probability"] = np.nan
 
     skipped = set()
 
-    for item_idx, df_item in grouped.items():
-        if len(df_item) > 64:
-            skipped.add(item_idx)
-            continue
+    for auction_id, df_item in tqdm(grouped.items(), desc="Inference per auction"):
+        df_item = df_item.sort_values("time_offset")
 
-        raw_buyout = df_item["buyout"].to_numpy(dtype=np.float32)
+        # -------- scalar features --------
+        features_np = np.stack([
+            np.log1p(df_item["bid"].to_numpy(dtype=np.float32)),
+            np.log1p(df_item["buyout"].to_numpy(dtype=np.float32)),
+            df_item["quantity"].to_numpy(dtype=np.float32),
+            df_item["time_left"].to_numpy(dtype=np.float32),
+            df_item["current_hours"].to_numpy(dtype=np.float32),
+        ], axis=1)
 
-        feats = []
-        for _, row in df_item.iterrows():
-            bid = np.log1p(row["bid"])
-            buyout = np.log1p(row["buyout"])
-            quantity = row["quantity"]
-            time_left = row["time_left"]
-            cur_hours = row["current_hours"]
+        features = torch.tensor(features_np, dtype=torch.float32, device=model.device)
+        features = (features - feature_stats["means"][:5].to(model.device)) / (feature_stats["stds"][:5].to(model.device) + 1e-6)
 
-            hour_sin = np.sin(2 * np.pi * prediction_time.hour / 24)
-            hour_cos = np.cos(2 * np.pi * prediction_time.hour / 24)
-            weekday_sin = np.sin(2 * np.pi * prediction_time.weekday() / 7)
-            weekday_cos = np.cos(2 * np.pi * prediction_time.weekday() / 7)
+        # -------- categorical / set features --------
+        item_indices = torch.tensor(df_item["item_index"].to_numpy(), dtype=torch.long, device=model.device)
+        contexts = torch.tensor(df_item["context"].to_numpy(), dtype=torch.long, device=model.device)
 
-            feats.append([bid, buyout, quantity, time_left, cur_hours, hour_sin, hour_cos, weekday_sin, weekday_cos])
+        # bonuses: lists guaranteed; slice/pad to MAX_BONUSES
+        bonus_lists_np = np.asarray([
+            (row_bonuses[:MAX_BONUSES] + [0] * (MAX_BONUSES - len(row_bonuses)))
+            for row_bonuses in df_item["bonus_lists"]
+        ], dtype=np.int64)
+        bonus_lists = torch.tensor(bonus_lists_np, dtype=torch.long, device=model.device)
 
-        feats = torch.tensor(feats, dtype=torch.float32, device=model.device)
-        feats = (feats - feature_stats["means"].to(model.device)) / \
-                (feature_stats["stds"].to(model.device) + 1e-6)
+        # modifiers: lists guaranteed; slice/pad to MAX_MODIFIERS
+        modifier_types_np = np.asarray([
+            (row_types[:MAX_MODIFIERS] + [0] * (MAX_MODIFIERS - len(row_types)))
+            for row_types in df_item["modifier_types"]
+        ], dtype=np.int64)
+        modifier_values_np = np.asarray([
+            (row_vals[:MAX_MODIFIERS] + [0.0] * (MAX_MODIFIERS - len(row_vals)))
+            for row_vals in df_item["modifier_values"]
+        ], dtype=np.float32)
 
-        item_indices = torch.tensor(df_item["item_index"].to_numpy(), dtype=torch.int32, device=model.device)
-
-        contexts = torch.tensor(df_item["context"].to_numpy(), dtype=torch.int32, device=model.device)
-
-        bonus_lists = [torch.tensor(x, dtype=torch.int32) for x in df_item["bonus_lists"]]
-        modifier_types = [torch.tensor(x, dtype=torch.int32) for x in df_item["modifier_types"]]
-        modifier_values = [torch.tensor(np.log1p(x), dtype=torch.float32) for x in df_item["modifier_values"]]
-
-        bonus_lists = pad_tensors_to_max_size(bonus_lists).to(model.device)
-        modifier_types = pad_tensors_to_max_size(modifier_types).to(model.device)
-        modifier_values = pad_tensors_to_max_size(modifier_values).to(model.device)
+        modifier_types = torch.tensor(modifier_types_np, dtype=torch.long, device=model.device)
+        modifier_values = torch.tensor(modifier_values_np, dtype=torch.float32, device=model.device)
+        modifier_values = torch.log1p(modifier_values)
         modifier_values = (modifier_values - feature_stats["modifiers_mean"].to(model.device)) / (feature_stats["modifiers_std"].to(model.device) + 1e-6)
 
-        X = (feats.unsqueeze(0), item_indices.unsqueeze(0), contexts.unsqueeze(0), bonus_lists.unsqueeze(0), modifier_types.unsqueeze(0), modifier_values.unsqueeze(0))
+        # temporal inputs
+        hour_of_week = torch.tensor(df_item["hour_of_week"].to_numpy(), dtype=torch.long, device=model.device)
+        time_offset = torch.tensor(
+            np.clip(df_item["time_offset"].to_numpy(), 0, max_hours_back),
+            dtype=torch.int32,
+            device=model.device
+        )
 
-        # Model now returns quantile predictions: (batch_size, seq_length, num_quantiles)
-        y_pred_quantiles = model(X)[0]  # Shape: (seq_length, num_quantiles)
+        # pack (batch = 1)
+        X = (
+            features.unsqueeze(0),
+            item_indices.unsqueeze(0),
+            contexts.unsqueeze(0),
+            bonus_lists.unsqueeze(0),
+            modifier_types.unsqueeze(0),
+            modifier_values.unsqueeze(0),
+            hour_of_week.unsqueeze(0),
+            time_offset.unsqueeze(0),
+        )
 
-        current_hours = df_item["current_hours"].to_numpy()
-        
-        # Extract quantile predictions [0.1, 0.5, 0.9]
-        q10_pred = y_pred_quantiles[:, 0].cpu().numpy()  # 0.1 quantile
-        q50_pred = y_pred_quantiles[:, 1].cpu().numpy()  # 0.5 quantile (median)
-        q90_pred = y_pred_quantiles[:, 2].cpu().numpy()  # 0.9 quantile
-        
-        df_out.loc[df_item.index, "prediction_q10"] = q10_pred
-        df_out.loc[df_item.index, "prediction_q50"] = q50_pred
-        df_out.loc[df_item.index, "prediction_q90"] = q90_pred
-        
-        # Use median (q50) for sale probability calculation
-        sale_prob = np.exp(-lambda_value * (q50_pred + current_hours))
-        df_out.loc[df_item.index, "sale_probability"] = sale_prob
+        # (B, S, Q) -> (S, Q)
+        y_pred_quantiles = model(X)[0]
+
+        # write predictions only for "now" rows (time_offset == 0)
+        mask_now = (df_item["time_offset"].to_numpy() == 0)
+        if mask_now.any():
+            q = y_pred_quantiles.detach().cpu().numpy()
+            idx_now = df_item.index[mask_now]
+            df_out.loc[idx_now, "prediction_q10"] = q[mask_now, 0]
+            df_out.loc[idx_now, "prediction_q50"] = q[mask_now, 1]
+            df_out.loc[idx_now, "prediction_q90"] = q[mask_now, 2]
+
+            current_hours_now = df_item.loc[mask_now, "current_hours"].to_numpy(dtype=np.float32)
+            sale_prob = np.exp(-lambda_value * (q[mask_now, 1] + current_hours_now))
+            df_out.loc[idx_now, "sale_probability"] = sale_prob
 
     if skipped:
-        df_out = df_out[~df_out["item_index"].isin(skipped)]
+        df_out = df_out[~df_out["id"].isin(skipped)]
 
-    # Round columns that will be displayed in the UI to 2 decimal places
-    df_out["buyout"] = np.round(df_out["buyout"], 2)
-    df_out["bid"] = np.round(df_out["bid"], 2)
-    df_out["time_left"] = np.round(df_out["time_left"], 2)
-    df_out["current_hours"] = np.round(df_out["current_hours"], 2)
-    df_out["prediction_q10"] = np.round(df_out["prediction_q10"], 2)
-    df_out["prediction_q50"] = np.round(df_out["prediction_q50"], 2)
-    df_out["prediction_q90"] = np.round(df_out["prediction_q90"], 2)
-    df_out["sale_probability"] = np.round(df_out["sale_probability"], 2)
+    # rounding for display (NaNs remain)
+    for col in ["buyout","bid","time_left","current_hours","prediction_q10","prediction_q50","prediction_q90","sale_probability"]:
+        if col in df_out.columns:
+            df_out[col] = np.round(df_out[col].astype(float), 2)
 
     return df_out
