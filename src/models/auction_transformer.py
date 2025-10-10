@@ -463,7 +463,7 @@ class AuctionTransformer(L.LightningModule):
                 total_steps=self.trainer.estimated_stepping_batches,
                 pct_start=0.05,
                 div_factor=25,
-                final_div_factor=100,
+                final_div_factor=10,
                 anneal_strategy="cos"
             ),
             "interval": "step",

@@ -1,320 +1,286 @@
-import os, json, torch, time
+#!/usr/bin/env python3
+import os, json, time
 import argparse
-import pandas as pd
 import numpy as np
+import pandas as pd
 import h5py
 from datetime import datetime
+import gc
+from collections import defaultdict, OrderedDict
 from tqdm import tqdm
 
-time_left_to_int = {
-    'VERY_LONG': 48,
-    'LONG': 12,
-    'MEDIUM': 2,
-    'SHORT': 0.5
+TIME_LEFT_TO_INT = {
+    'VERY_LONG': 48.0,
+    'LONG': 12.0,
+    'MEDIUM': 2.0,
+    'SHORT': 0.5,
 }
 
 MAX_BONUSES = 9
 MAX_MODIFIERS = 11
+ROW_CHUNK = 8192
 
-exclude_first_times = [
-    '09-03-2025', # we should exclude items that appeared in the first two days
-    '10-03-2025',
-    '22-03-2025', # we should exclude items that appeared in the last two days
-    '23-03-2025',
-    '24-03-2025',
-    '25-03-2025', 
-    '26-03-2025',
-    '20-08-2025',
-    '21-08-2025',
-    '22-08-2025', # we should exclude items that appeared in the last day and all after that
-]
-
-# Use the last date in the exclude_first_times array
+exclude_first_times = ['01-05-2025', '20-08-2025','21-08-2025','22-08-2025']
 last_exclude_date = datetime.strptime(exclude_first_times[-1], '%d-%m-%Y')
 
+
+def pad_or_truncate_bonuses(bonus_ids, bonus_to_idx):
+    mapped = [int(bonus_to_idx[str(b)]) for b in bonus_ids][:MAX_BONUSES]
+    if len(mapped) < MAX_BONUSES:
+        mapped += [0] * (MAX_BONUSES - len(mapped))
+    return np.asarray(mapped, dtype=np.int32)
+
+
+def pad_or_truncate_modifiers(modifiers, modtype_to_idx):
+    modifiers = modifiers[:MAX_MODIFIERS]
+    types = [int(modtype_to_idx[str(m['type'])]) for m in modifiers]
+    values = [float(m['value']) for m in modifiers]
+    if len(types) < MAX_MODIFIERS:
+        types += [0] * (MAX_MODIFIERS - len(types))
+        values += [0.0] * (MAX_MODIFIERS - len(values))
+    return (
+        np.asarray(types, dtype=np.int32),
+        np.asarray(values, dtype=np.float32)
+    )
+
+
+def _check_item_datasets(h5_file, item_id_str):
+    grp_root = h5_file.require_group('items')
+    grp = grp_root.require_group(item_id_str)
+    if 'data' not in grp:
+        grp.create_dataset('data', shape=(0, 6), maxshape=(None, 6),
+                           dtype='float32', compression='lzf', chunks=(ROW_CHUNK, 6))
+    if 'contexts' not in grp:
+        grp.create_dataset('contexts', shape=(0,), maxshape=(None,),
+                           dtype='int32', compression='lzf', chunks=(ROW_CHUNK,))
+    if 'bonus_lists' not in grp:
+        grp.create_dataset('bonus_lists', shape=(0, MAX_BONUSES), maxshape=(None, MAX_BONUSES),
+                           dtype='int32', compression='lzf', chunks=(ROW_CHUNK, MAX_BONUSES))
+    if 'modifier_types' not in grp:
+        grp.create_dataset('modifier_types', shape=(0, MAX_MODIFIERS), maxshape=(None, MAX_MODIFIERS),
+                           dtype='int32', compression='lzf', chunks=(ROW_CHUNK, MAX_MODIFIERS))
+    if 'modifier_values' not in grp:
+        grp.create_dataset('modifier_values', shape=(0, MAX_MODIFIERS), maxshape=(None, MAX_MODIFIERS),
+                           dtype='float32', compression='lzf', chunks=(ROW_CHUNK, MAX_MODIFIERS))
+    return grp
+
+
+def _append_item_block(grp, data_h, contexts_h, bonus_lists_h, modifier_types_h, modifier_values_h):
+    n = data_h.shape[0]
+    old = grp['data'].shape[0]
+    new = old + n
+
+    grp['data'].resize((new, 6))
+    grp['contexts'].resize((new,))
+    grp['bonus_lists'].resize((new, MAX_BONUSES))
+    grp['modifier_types'].resize((new, MAX_MODIFIERS))
+    grp['modifier_values'].resize((new, MAX_MODIFIERS))
+
+    grp['data'][old:new, :] = data_h
+    grp['contexts'][old:new] = contexts_h
+    grp['bonus_lists'][old:new, :] = bonus_lists_h
+    grp['modifier_types'][old:new, :] = modifier_types_h
+    grp['modifier_values'][old:new, :] = modifier_values_h
+    
+    return old, n
+
+
 def process_auctions(args):
-    print('Processing auctions...')
-    file_info = {}
+    print('Processing auctions...', flush=True)
+
     data_dir = args.data_dir
-    h5_filename = 'sequences.h5'
     mappings_dir = args.mappings_dir
+    output_dir = args.output_dir
 
-    with open(args.timestamps, 'r') as f:
-        timestamps = json.load(f)
+    h5_path = os.path.join(output_dir, 'sequences.h5')
+    csv_path = os.path.join(output_dir, 'indices.csv')
+    parquet_path = os.path.join(output_dir, 'indices.parquet')
 
-    with open(os.path.join(mappings_dir, 'item_to_idx.json'), 'r') as f:
-        item_to_idx = json.load(f)
+    if os.path.exists(csv_path):
+        os.remove(csv_path)
 
-    with open(os.path.join(mappings_dir, 'context_to_idx.json'), 'r') as f:
-        context_to_idx = json.load(f)
-        
-    with open(os.path.join(mappings_dir, 'bonus_to_idx.json'), 'r') as f:
-        bonus_to_idx = json.load(f)
+    # Load mappings
+    with open(args.timestamps, 'r') as f: timestamps = json.load(f)
+    with open(os.path.join(mappings_dir, 'item_to_idx.json'), 'r') as f: item_to_idx = json.load(f)
+    with open(os.path.join(mappings_dir, 'context_to_idx.json'), 'r') as f: context_to_idx = json.load(f)
+    with open(os.path.join(mappings_dir, 'bonus_to_idx.json'), 'r') as f: bonus_to_idx = json.load(f)
+    with open(os.path.join(mappings_dir, 'modtype_to_idx.json'), 'r') as f: modtype_to_idx = json.load(f)
 
-    with open(os.path.join(mappings_dir, 'modtype_to_idx.json'), 'r') as f:
-        modtype_to_idx = json.load(f)
+    # Discover files and group by date
+    files = []
+    for root, _, fs in os.walk(data_dir):
+        for fn in fs:
+            fp = os.path.join(root, fn)
+            dt = datetime.strptime(fn.split('.')[0], '%Y%m%dT%H')
+            files.append((fp, dt))
+    files.sort(key=lambda x: x[1])
 
-    for root, dirs, files in os.walk(data_dir):
-        for filename in files:
-            filepath = os.path.join(root, filename)
-            date = datetime.strptime(filename.split('.')[0], '%Y%m%dT%H')
-            file_info[filepath] = date
+    files_by_day = OrderedDict()
+    for fp, dt in files:
+        key = dt.strftime('%Y-%m-%d')
+        files_by_day.setdefault(key, []).append((fp, dt))
 
-    file_info = {k: v for k, v in sorted(file_info.items(), key=lambda item: item[1])}
-    
-    total_files = len(file_info)
-    print(f'Processing all {total_files} files')
+    if not os.path.exists(h5_path):
+        with h5py.File(h5_path, 'w'): pass
 
-    csv_file_path = os.path.join(args.output_dir, 'indices.csv')
-    parquet_file_path = os.path.join(args.output_dir, 'indices.parquet')
-    
-    # Remove existing CSV file to start fresh
-    if os.path.exists(csv_file_path):
-        os.remove(csv_file_path)
+    header_needed = not os.path.exists(csv_path)
 
-    if not os.path.exists(os.path.join(args.output_dir, h5_filename)):
-        print(f'Creating {h5_filename}')
-
-        with h5py.File(os.path.join(args.output_dir, h5_filename), 'w') as f:
-            pass
-
-    for filepath in tqdm(list(file_info.keys())):
-        prediction_time = file_info[filepath]
-        
-        # Skip files that come after the last exclude date
-        if prediction_time.date() > last_exclude_date.date() or prediction_time.strftime('%d-%m-%Y') in exclude_first_times:
-            print(f'Skipping {filepath}')
+    # Process per day with tqdm
+    for day_key, day_files in tqdm(list(files_by_day.items()), desc='days'):
+        day_files = [(fp, dt) for (fp, dt) in day_files
+                     if not (dt.date() > last_exclude_date.date() or dt.strftime('%d-%m-%Y') in exclude_first_times)]
+        if not day_files:
+            tqdm.write(f"[day {day_key}] skipped (policy filtered)")
             continue
-            
-        with open(filepath, 'r') as f:
+
+        day_items = defaultdict(lambda: {
+            'records': [], 'lengths': [], 'stats': [],
+            'data_blocks': [], 'contexts_blocks': [],
+            'bonus_blocks': [], 'modifier_types_blocks': [], 'modifier_values_blocks': [],
+        })
+
+        # Accumulate each hour in the day
+        for filepath, prediction_time in tqdm(day_files, desc=f'{day_key} hours', leave=False):
             try:
-                json_data = json.load(f)
-            except json.JSONDecodeError as e:
-                print(f"Error loading file {filepath}: {e}")
-                continue
-            except Exception as e:
-                print(f"Unexpected error loading file {filepath}: {e}")
-                continue
-                
-        auctions = json_data['auctions']
-        prediction_time = file_info[filepath]
-        auctions_by_item = {}
-        auction_indices = []
-        
-        for auction in auctions:
-            auction_id = str(auction['id'])
-            item_index = item_to_idx[str(auction['item']['id'])]
-            bid = auction.get('bid', 0) / 10000.0
-            buyout = auction.get('buyout', 0) / 10000.0
-            time_left = auction['time_left']
-            quantity = auction['quantity']
-            context = context_to_idx[str(auction['item'].get('context', 0))]
-            bonus_lists = [bonus_to_idx[str(bonus)] for bonus in auction['item'].get('bonus_lists', [])][:MAX_BONUSES]
-            modifiers = auction['item'].get('modifiers', [])[:MAX_MODIFIERS]
-
-            modifier_types = [modtype_to_idx[str(modifier['type'])] for modifier in modifiers]
-            modifier_values = [modifier['value'] for modifier in modifiers]
-
-            if 'pet_species_id' in auction['item']:
+                with open(filepath, 'r') as f:
+                    json_data = json.load(f)
+            except json.JSONDecodeError:
+                tqdm.write(f"[bad-json] Skipping {filepath}")
                 continue
 
-            first_appearance = datetime.strptime(timestamps[auction_id]['first_appearance'], '%Y-%m-%d %H:%M:%S')
-            last_appearance = datetime.strptime(timestamps[auction_id]['last_appearance'], '%Y-%m-%d %H:%M:%S')
+            auctions = json_data['auctions']
+            record_str = prediction_time.strftime('%Y-%m-%d %H:00:00')
 
-            current_hours = (prediction_time - first_appearance).total_seconds() / 3600
-            hours_on_sale = (last_appearance - prediction_time).total_seconds() / 3600
+            auctions_by_item = {}
+            for auction in auctions:
+                if 'pet_species_id' in auction['item']:
+                    continue
 
-            processed_auction = [
-                bid,
-                buyout,
-                quantity,
-                time_left_to_int[time_left],
-                current_hours,
-                hours_on_sale,
-                context,
-                np.array(bonus_lists),
-                np.array(modifier_types),
-                np.array(modifier_values),
+                auction_id = str(auction['id'])
+                item_index = int(item_to_idx[str(auction['item']['id'])])
+                bid = float(auction.get('bid', 0)) / 10000.0
+                buyout = float(auction.get('buyout', 0)) / 10000.0
+                time_left = float(TIME_LEFT_TO_INT[auction['time_left']])
+                quantity = float(auction['quantity'])
+                context = int(context_to_idx[str(auction['item'].get('context', 0))])
+
+                bonus_arr = pad_or_truncate_bonuses(auction['item'].get('bonus_lists', []), bonus_to_idx)
+                modifier_types, modifier_values = pad_or_truncate_modifiers(auction['item'].get('modifiers', []), modtype_to_idx)
+
+                first_appearance = datetime.strptime(timestamps[auction_id]['first_appearance'], '%Y-%m-%d %H:%M:%S')
+                last_appearance  = datetime.strptime(timestamps[auction_id]['last_appearance'],  '%Y-%m-%d %H:%M:%S')
+                current_hours = (prediction_time - first_appearance).total_seconds() / 3600.0
+                hours_on_sale = (last_appearance - prediction_time).total_seconds() / 3600.0
+
+                row_data = np.array([bid, buyout, quantity, time_left, current_hours, hours_on_sale], dtype=np.float32)
+
+                if item_index not in auctions_by_item:
+                    auctions_by_item[item_index] = {
+                        'data': [], 'contexts': [],
+                        'bonus_lists': [], 'modifier_types': [], 'modifier_values': []
+                    }
+
+                auctions_by_item[item_index]['data'].append(row_data)
+                auctions_by_item[item_index]['contexts'].append(context)
+                auctions_by_item[item_index]['bonus_lists'].append(bonus_arr)
+                auctions_by_item[item_index]['modifier_types'].append(modifier_types)
+                auctions_by_item[item_index]['modifier_values'].append(modifier_values)
+
+            for item_index, pack in auctions_by_item.items():
+                data_h = np.vstack(pack['data']).astype(np.float32, copy=False)
+                contexts_h = np.asarray(pack['contexts'], dtype=np.int32)
+                bonus_lists_h = np.vstack(pack['bonus_lists']).astype(np.int32, copy=False)
+                modifier_types_h = np.vstack(pack['modifier_types']).astype(np.int32, copy=False)
+                modifier_values_h = np.vstack(pack['modifier_values']).astype(np.float32, copy=False)
+
+                item_hours_on_sale = data_h[:, 5]
+                item_current_hours = data_h[:, 4]
+                stats_tuple = (
+                    int(len(item_hours_on_sale)),
+                    float(np.mean(item_hours_on_sale)), float(np.std(item_hours_on_sale)),
+                    float(np.min(item_hours_on_sale)), float(np.max(item_hours_on_sale)),
+                    float(np.mean(item_current_hours)), float(np.std(item_current_hours)),
+                    float(np.min(item_current_hours)), float(np.max(item_current_hours)),
+                )
+
+                buf = day_items[item_index]
+                buf['records'].append(record_str)
+                buf['lengths'].append(int(data_h.shape[0]))
+                buf['data_blocks'].append(data_h)
+                buf['contexts_blocks'].append(contexts_h)
+                buf['bonus_blocks'].append(bonus_lists_h)
+                buf['modifier_types_blocks'].append(modifier_types_h)
+                buf['modifier_values_blocks'].append(modifier_values_h)
+                buf['stats'].append(stats_tuple)
+
+            del auctions_by_item, auctions, json_data
+            gc.collect()
+
+        # Write once per item for the day + emit indices per hour
+        indices_rows = []
+        with h5py.File(h5_path, 'a') as h5f:
+            for item_index, buf in day_items.items():
+                grp = _check_item_datasets(h5f, str(item_index))
+
+                data_day = np.concatenate(buf['data_blocks'], axis=0)
+                contexts_day = np.concatenate(buf['contexts_blocks'], axis=0)
+                bonus_lists_day = np.concatenate(buf['bonus_blocks'], axis=0)
+                modifier_types_day = np.concatenate(buf['modifier_types_blocks'], axis=0)
+                modifier_values_day = np.concatenate(buf['modifier_values_blocks'], axis=0)
+
+                base_start, _ = _append_item_block(
+                    grp, data_day, contexts_day, bonus_lists_day, modifier_types_day, modifier_values_day
+                )
+
+                prefix = 0
+                for rec, stats in zip(buf['records'], buf['stats']):
+                    g_len = stats[0]
+                    indices_rows.append((
+                        rec, int(item_index),
+                        stats[0], stats[1], stats[2], stats[3], stats[4],
+                        stats[5], stats[6], stats[7], stats[8],
+                        np.uint64(base_start + prefix), np.uint32(g_len),
+                    ))
+                    prefix += g_len
+
+        if indices_rows:
+            cols = [
+                'record', 'item_index',
+                'g_hours_on_sale_len', 'g_hours_on_sale_mean', 'g_hours_on_sale_std',
+                'g_hours_on_sale_min', 'g_hours_on_sale_max',
+                'g_current_hours_mean', 'g_current_hours_std',
+                'g_current_hours_min', 'g_current_hours_max',
+                'start', 'length'
             ]
-            
-            if item_index not in auctions_by_item:
-                auctions_by_item[item_index] = []
+            pd.DataFrame(indices_rows, columns=cols).to_csv(
+                csv_path, mode='a', header=header_needed, index=False
+            )
+            header_needed = False
 
-            auctions_by_item[item_index].append(processed_auction)
+        del day_items, indices_rows
+        gc.collect()
 
-        with h5py.File(os.path.join(args.output_dir, h5_filename), 'a') as h5_file:
-            group_path = f"{prediction_time.strftime('%Y-%m-%d')}/{prediction_time.strftime('%H')}"
-            if group_path not in h5_file:
-                h5_file.create_group(group_path)
-            
-            # Check if this time/hour group already exists
-            if 'data' in h5_file[group_path]:
-                print(f"Group {group_path} already exists. Skipping.")
-                continue
-                
-            # Sort items by item_index for consistent ordering
-            sorted_items = sorted(auctions_by_item.items())
-            
-            # Concatenate all auctions across all items
-            all_auctions_list = []
-            all_contexts_list = []
-            all_bonus_lists = []
-            all_modifier_types = []
-            all_modifier_values = []
-            
-            # Track row splits using CSR/indptr format (1-D prefix sum)
-            row_splits = [0]  # Start with 0
-            sorted_item_ids = []
-            
-            for item_index, all_auctions in sorted_items:
-                # Calculate statistics for this item
-                item_hours_on_sale = np.array([auction[5] for auction in all_auctions])
-                item_current_hours = np.array([auction[4] for auction in all_auctions])
+    # CSV -> Parquet
+    if os.path.exists(csv_path):
+        print('Converting CSV to Parquet...', flush=True)
+        gc.collect()
+        df = pd.read_csv(csv_path)
+        df.to_parquet(parquet_path, index=False)
+        print(f'Created {parquet_path} with {len(df)} records', flush=True)
 
-                group_hours_on_sale_mean = round(np.mean(item_hours_on_sale), 2)
-                group_hours_on_sale_std = round(np.std(item_hours_on_sale), 2)
-                group_hours_on_sale_min = round(np.min(item_hours_on_sale), 2)
-                group_hours_on_sale_max = round(np.max(item_hours_on_sale), 2)
-                group_hours_on_sale_len = len(item_hours_on_sale)
+    print("Done.", flush=True)
 
-                group_current_hours_mean = round(np.mean(item_current_hours), 2)
-                group_current_hours_std = round(np.std(item_current_hours), 2)
-                group_current_hours_min = round(np.min(item_current_hours), 2)
-                group_current_hours_max = round(np.max(item_current_hours), 2)
 
-                auction_indices.append((
-                    prediction_time.strftime('%Y-%m-%d %H:%M:%S'), 
-                    item_index, 
-                    group_hours_on_sale_len, 
-                    group_hours_on_sale_mean, 
-                    group_hours_on_sale_std, 
-                    group_hours_on_sale_min, 
-                    group_hours_on_sale_max,
-                    group_current_hours_mean,
-                    group_current_hours_std,
-                    group_current_hours_min,
-                    group_current_hours_max
-                ))
-                
-                # Add to concatenated lists
-                auctions_data = np.array([auction[:6] for auction in all_auctions])
-                contexts_data = np.array([auction[6] for auction in all_auctions])
-                
-                # Create fixed-size arrays directly
-                bonus_sequences = [auction[7] for auction in all_auctions]
-                modifier_type_sequences = [auction[8] for auction in all_auctions]
-                modifier_value_sequences = [auction[9] for auction in all_auctions]
-                
-                bonus_lists_data = np.array([np.pad(seq, (0, max(0, MAX_BONUSES - len(seq))), 'constant')[:MAX_BONUSES] for seq in bonus_sequences])
-                modifier_types_data = np.array([np.pad(seq, (0, max(0, MAX_MODIFIERS - len(seq))), 'constant')[:MAX_MODIFIERS] for seq in modifier_type_sequences])
-                modifier_values_data = np.array([np.pad(seq, (0, max(0, MAX_MODIFIERS - len(seq))), 'constant')[:MAX_MODIFIERS] for seq in modifier_value_sequences])
-                
-                all_auctions_list.append(auctions_data)
-                all_contexts_list.append(contexts_data)
-                all_bonus_lists.append(bonus_lists_data)
-                all_modifier_types.append(modifier_types_data)
-                all_modifier_values.append(modifier_values_data)
-                
-                # Record row split using CSR format (cumulative sum)
-                num_auctions = len(all_auctions)
-                row_splits.append(row_splits[-1] + num_auctions)
-                sorted_item_ids.append(item_index)
-            
-            # Concatenate all data
-            if all_auctions_list:
-                concatenated_data = np.concatenate(all_auctions_list, axis=0)
-                concatenated_contexts = np.concatenate(all_contexts_list, axis=0)
-                concatenated_bonus_lists = np.concatenate(all_bonus_lists, axis=0)
-                concatenated_modifier_types = np.concatenate(all_modifier_types, axis=0)
-                concatenated_modifier_values = np.concatenate(all_modifier_values, axis=0)
-                
-                # Determine chunking parameters
-                total_rows = concatenated_data.shape[0]
-                rows_chunk = min(4096, total_rows)  # Use 4096 or total rows if smaller
-                
-                # Store concatenated data with compression and chunking
-                # Big row-major arrays with compression
-                h5_file[group_path].create_dataset(
-                    'data', 
-                    data=concatenated_data,
-                    compression='lzf',
-                    chunks=(rows_chunk, concatenated_data.shape[1])
-                )
-                h5_file[group_path].create_dataset(
-                    'contexts', 
-                    data=concatenated_contexts,
-                    compression='lzf',
-                    chunks=(rows_chunk,)
-                )
-                h5_file[group_path].create_dataset(
-                    'bonus_lists', 
-                    data=concatenated_bonus_lists,
-                    compression='lzf',
-                    chunks=(rows_chunk, concatenated_bonus_lists.shape[1])
-                )
-                h5_file[group_path].create_dataset(
-                    'modifier_types', 
-                    data=concatenated_modifier_types,
-                    compression='lzf',
-                    chunks=(rows_chunk, concatenated_modifier_types.shape[1])
-                )
-                h5_file[group_path].create_dataset(
-                    'modifier_values', 
-                    data=concatenated_modifier_values,
-                    compression='lzf',
-                    chunks=(rows_chunk, concatenated_modifier_values.shape[1])
-                )
-                
-                # Store row splits (CSR format) and sorted item IDs with light compression
-                # Small index arrays
-                h5_file[group_path].create_dataset(
-                    'row_splits', 
-                    data=np.array(row_splits, dtype=np.int32),
-                    compression='lzf',
-                    chunks=(len(row_splits),)
-                )
-                h5_file[group_path].create_dataset(
-                    'item_ids', 
-                    data=np.array(sorted_item_ids, dtype=np.int32),
-                    compression='lzf',
-                    chunks=(len(sorted_item_ids),)
-                )
-
-        if auction_indices:
-            new_df = pd.DataFrame(auction_indices, columns=[
-                'record', 
-                'item_index', 
-                'g_hours_on_sale_len',
-                'g_hours_on_sale_mean',
-                'g_hours_on_sale_std',
-                'g_hours_on_sale_min',
-                'g_hours_on_sale_max',
-                'g_current_hours_mean',
-                'g_current_hours_std',
-                'g_current_hours_min',
-                'g_current_hours_max'
-            ])
-            
-            # Append to CSV file (creates header on first write)
-            new_df.to_csv(csv_file_path, mode='a', header=not os.path.exists(csv_file_path), index=False)
-    
-    # Convert CSV to parquet at the end
-    if os.path.exists(csv_file_path):
-        print('Converting CSV to parquet...')
-        final_df = pd.read_csv(csv_file_path)
-        final_df.to_parquet(parquet_file_path, index=False)
-        os.remove(csv_file_path)  # Clean up CSV file
-        print(f'Created {parquet_file_path} with {len(final_df)} records')
-            
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description='Check JSON files in auctions folder')
-    parser.add_argument('--data_dir', type=str, help='Path to the auctions folder', required=True)
-    parser.add_argument('--timestamps', type=str, help='Path to the timestamps JSON file', required=True)
-    parser.add_argument('--output_dir', type=str, help='Path to the output folder', required=True)
-    parser.add_argument('--mappings_dir', type=str, help='Path to the mappings folder', required=True)
+    parser = argparse.ArgumentParser(description='Per-item HDF5 writer with 24h batching + indices CSV→Parquet')
+    parser.add_argument('--data_dir', type=str, default='data/tww/auctions/')
+    parser.add_argument('--timestamps', type=str, default='generated/timestamps.json')
+    parser.add_argument('--output_dir', type=str, default='generated')
+    parser.add_argument('--mappings_dir', type=str, default='generated/mappings/')
 
     args = parser.parse_args()
+    os.makedirs(args.output_dir, exist_ok=True)
 
     start_time = time.time()
     process_auctions(args)
-    print(f"Execution time: {time.time() - start_time:.2f} seconds")
+    print(f"\nExecution time: {time.time() - start_time:.2f} seconds", flush=True)
