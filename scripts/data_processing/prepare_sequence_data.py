@@ -18,7 +18,8 @@ TIME_LEFT_TO_INT = {
 
 MAX_BONUSES = 9
 MAX_MODIFIERS = 11
-ROW_CHUNK = 8192
+MAX_SEQUENCE_LENGTH = 128
+ROW_CHUNK = 1024
 
 exclude_first_times = ['01-05-2025', '20-08-2025','21-08-2025','22-08-2025']
 last_exclude_date = datetime.strptime(exclude_first_times[-1], '%d-%m-%Y')
@@ -47,21 +48,18 @@ def pad_or_truncate_modifiers(modifiers, modtype_to_idx):
 def _check_item_datasets(h5_file, item_id_str):
     grp_root = h5_file.require_group('items')
     grp = grp_root.require_group(item_id_str)
+
     if 'data' not in grp:
-        grp.create_dataset('data', shape=(0, 6), maxshape=(None, 6),
-                           dtype='float32', compression='lzf', chunks=(ROW_CHUNK, 6))
+        grp.create_dataset('data', shape=(0, 6), maxshape=(None, 6), dtype='float32', chunks=(ROW_CHUNK, 6))
     if 'contexts' not in grp:
-        grp.create_dataset('contexts', shape=(0,), maxshape=(None,),
-                           dtype='int32', compression='lzf', chunks=(ROW_CHUNK,))
+        grp.create_dataset('contexts', shape=(0,), maxshape=(None,), dtype='int32', chunks=(ROW_CHUNK,))
     if 'bonus_lists' not in grp:
-        grp.create_dataset('bonus_lists', shape=(0, MAX_BONUSES), maxshape=(None, MAX_BONUSES),
-                           dtype='int32', compression='lzf', chunks=(ROW_CHUNK, MAX_BONUSES))
+        grp.create_dataset('bonus_lists', shape=(0, MAX_BONUSES), maxshape=(None, MAX_BONUSES), dtype='int32', chunks=(ROW_CHUNK, MAX_BONUSES))
     if 'modifier_types' not in grp:
-        grp.create_dataset('modifier_types', shape=(0, MAX_MODIFIERS), maxshape=(None, MAX_MODIFIERS),
-                           dtype='int32', compression='lzf', chunks=(ROW_CHUNK, MAX_MODIFIERS))
+        grp.create_dataset('modifier_types', shape=(0, MAX_MODIFIERS), maxshape=(None, MAX_MODIFIERS), dtype='int32', chunks=(ROW_CHUNK, MAX_MODIFIERS))
     if 'modifier_values' not in grp:
-        grp.create_dataset('modifier_values', shape=(0, MAX_MODIFIERS), maxshape=(None, MAX_MODIFIERS),
-                           dtype='float32', compression='lzf', chunks=(ROW_CHUNK, MAX_MODIFIERS))
+        grp.create_dataset('modifier_values', shape=(0, MAX_MODIFIERS), maxshape=(None, MAX_MODIFIERS), dtype='float32', chunks=(ROW_CHUNK, MAX_MODIFIERS))
+
     return grp
 
 
@@ -150,6 +148,7 @@ def process_auctions(args):
 
             auctions = json_data['auctions']
             record_str = prediction_time.strftime('%Y-%m-%d %H:00:00')
+            print(record_str)
 
             auctions_by_item = {}
             for auction in auctions:
@@ -192,6 +191,14 @@ def process_auctions(args):
                 bonus_lists_h = np.vstack(pack['bonus_lists']).astype(np.int32, copy=False)
                 modifier_types_h = np.vstack(pack['modifier_types']).astype(np.int32, copy=False)
                 modifier_values_h = np.vstack(pack['modifier_values']).astype(np.float32, copy=False)
+
+                if data_h.shape[0] > MAX_SEQUENCE_LENGTH:
+                    print(f'Capping {data_h.shape[0]} from item {item_index} to {MAX_SEQUENCE_LENGTH}')
+                    data_h = data_h[:MAX_SEQUENCE_LENGTH]
+                    contexts_h = contexts_h[:MAX_SEQUENCE_LENGTH]
+                    bonus_lists_h = bonus_lists_h[:MAX_SEQUENCE_LENGTH]
+                    modifier_types_h = modifier_types_h[:MAX_SEQUENCE_LENGTH]
+                    modifier_values_h = modifier_values_h[:MAX_SEQUENCE_LENGTH]
 
                 item_hours_on_sale = data_h[:, 5]
                 item_current_hours = data_h[:, 4]

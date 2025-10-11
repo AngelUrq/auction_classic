@@ -24,7 +24,7 @@ model = None
 feature_stats = None
 prediction_time = None
 recommendations = None
-ckpt_path = 'models/auction-transformer-quantile/epoch_epoch=01.ckpt'
+ckpt_path = 'models/transformer-4M-quantile-how-historical/last-v2.ckpt'
 max_hours_back = 24
 
 

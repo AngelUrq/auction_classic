@@ -6,3 +6,4 @@ tqdm
 scikit-learn
 torch_tb_profiler
 h5py
+pyarrow

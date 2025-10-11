@@ -13,62 +13,40 @@ CLIENT_KEY = "c39078bd5f0f4e798a3a1b734dd9d280"
 SECRET_KEY = "4UEplhA8jYa8wvX58C5QdV7JDTDY9rNX"
 REALM_ID = "3676"
 
-def pad_tensors_to_max_size(tensor_list):
-    # Find maximum dimensions
-    max_dims = []
-    for dim in range(tensor_list[0].dim()):
-        max_dim_size = max([tensor.size(dim) for tensor in tensor_list])
-        max_dims.append(max_dim_size)
-    
-    # Pad each tensor to match max dimensions
-    padded_tensors = []
-    for tensor in tensor_list:
-        # Calculate padding for each dimension
-        pad_sizes = []
-        for dim in range(tensor.dim()):
-            pad_size = max_dims[dim] - tensor.size(dim)
-            # Padding is applied from the last dimension backward
-            # For each dimension, we need (padding_left, padding_right)
-            # We'll add all padding to the right side
-            pad_sizes = [0, pad_size] + pad_sizes
-        
-        # Apply padding
-        padded_tensor = F.pad(tensor, pad_sizes, mode='constant', value=0)
-        padded_tensors.append(padded_tensor)
-    
-    return torch.stack(padded_tensors)
+import torch
+import torch.nn.functional as F
+from torch.nn.utils.rnn import pad_sequence
 
-def collate_auctions(batch):
-    # Extract lists of each field from the batch of dictionaries
-    auctions = [item['auctions'] for item in batch]
-    item_index = [item['item_index'] for item in batch]
-    contexts = [item['contexts'] for item in batch]
-    bonus_lists = [item['bonus_lists'] for item in batch]
-    modifier_types = [item['modifier_types'] for item in batch]
-    modifier_values = [item['modifier_values'] for item in batch]
-    current_hours = [item['current_hours_raw'] for item in batch]
-    time_left = [item['time_left_raw'] for item in batch]
-    hour_of_week = [item['hour_of_week'] for item in batch]
-    time_offset = [item['time_offset'] for item in batch]
-    targets = [item['target'] for item in batch]
+def _crop_left(t: torch.Tensor, L: int) -> torch.Tensor:
+    """Keep only the last L steps (crop from the left)."""
+    if t.size(0) > L:
+        return t[-L:]
+    return t
 
-    # Pad all tensors to max size
-    auctions = pad_tensors_to_max_size(auctions)
-    item_index = pad_tensors_to_max_size(item_index)
-    contexts = pad_tensors_to_max_size(contexts)
-    bonus_lists = pad_tensors_to_max_size(bonus_lists)
-    modifier_types = pad_tensors_to_max_size(modifier_types)
-    modifier_values = pad_tensors_to_max_size(modifier_values)
-    current_hours = pad_tensors_to_max_size(current_hours)
-    time_left = pad_tensors_to_max_size(time_left)
-    hour_of_week = pad_tensors_to_max_size(hour_of_week)
-    time_offset = pad_tensors_to_max_size(time_offset)
-    targets = pad_tensors_to_max_size(targets)
+def _crop_and_pad(field_list, L: int, pad_value=0):
+    """Crop each sequence to max L (from the left), then right-pad to batch max length (≤ L)."""
+    cropped = [_crop_left(t, L) for t in field_list]
+    return pad_sequence(cropped, batch_first=True, padding_value=pad_value)
 
-    # Return as dictionary for consistency
+def collate_auctions(batch, max_sequence_length=4096, pad_value=0):
+    """Collate function: crop from the left, pad to the right (batch max length ≤ L)."""
+    L = max_sequence_length
+
+    auctions       = _crop_and_pad([b['auctions']          for b in batch], L, pad_value)
+    item_index     = _crop_and_pad([b['item_index']        for b in batch], L, pad_value)
+    contexts       = _crop_and_pad([b['contexts']          for b in batch], L, pad_value)
+    bonus_lists    = _crop_and_pad([b['bonus_lists']       for b in batch], L, pad_value)
+    modifier_types = _crop_and_pad([b['modifier_types']    for b in batch], L, pad_value)
+    modifier_values= _crop_and_pad([b['modifier_values']   for b in batch], L, pad_value)
+    current_hours  = _crop_and_pad([b['current_hours_raw'] for b in batch], L, pad_value)
+    time_left      = _crop_and_pad([b['time_left_raw']     for b in batch], L, pad_value)
+    hour_of_week   = _crop_and_pad([b['hour_of_week']      for b in batch], L, pad_value)
+    time_offset    = _crop_and_pad([b['time_offset']       for b in batch], L, pad_value)
+    targets        = _crop_and_pad([b['target']            for b in batch], L, pad_value)
+
     return {
-        'auctions': auctions,
-        'item_index': item_index,
+        'auctions': auctions,                # (B, T_max, 6)
+        'item_index': item_index,            # (B, T_max)
         'contexts': contexts,
         'bonus_lists': bonus_lists,
         'modifier_types': modifier_types,
@@ -79,6 +57,7 @@ def collate_auctions(batch):
         'time_offset': time_offset,
         'target': targets
     }
+
 
 def create_access_token(client_id, client_secret, region='us'):
     """Create an OAuth access token for the Blizzard API.
