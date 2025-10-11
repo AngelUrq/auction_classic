@@ -28,7 +28,7 @@ def _crop_and_pad(field_list, L: int, pad_value=0):
     cropped = [_crop_left(t, L) for t in field_list]
     return pad_sequence(cropped, batch_first=True, padding_value=pad_value)
 
-def collate_auctions(batch, max_sequence_length=4096, pad_value=0):
+def collate_auctions(batch, max_sequence_length=8192, pad_value=0):
     """Collate function: crop from the left, pad to the right (batch max length ≤ L)."""
     L = max_sequence_length
 
