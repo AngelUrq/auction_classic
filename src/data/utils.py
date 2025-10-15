@@ -149,7 +149,7 @@ def load_auctions_from_sample(
                 json_data = json.load(f)
         except Exception:
             continue
-
+        
         for auction in json_data.get('auctions', []):
             if 'pet_species_id' in auction.get('item', {}):
                 continue

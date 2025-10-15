@@ -13,12 +13,6 @@ def predict_dataframe(model, df_auctions, prediction_time, feature_stats, lambda
 
     # only use rows the model can embed (context 0..max_hours_back in the past)
     df = df_auctions[(df_auctions["time_offset"] >= 0) & (df_auctions["time_offset"] <= max_hours_back)].copy()
-
-    # sort by id and time_offset
-    #df.sort_values(["id", "time_offset"], inplace=True)
-    #df.to_csv("df_auctions.csv", index=False)
-
-    # sequences per auction id (history of a single listing)
     grouped = {idx: g for idx, g in df.groupby("item_index")}
 
     df_out = df.copy()
@@ -29,7 +23,7 @@ def predict_dataframe(model, df_auctions, prediction_time, feature_stats, lambda
 
     skipped = set()
 
-    for auction_id, df_item in tqdm(grouped.items(), desc="Inference per auction"):
+    for auction_id, df_item in grouped.items():
         df_item = df_item.sort_values("time_offset")
 
         # -------- scalar features --------

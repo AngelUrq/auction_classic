@@ -8,6 +8,7 @@ import gradio as gr
 
 from datetime import datetime, timedelta
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 wd = Path(__file__).parent.parent.resolve()
 sys.path.append(str(wd))
@@ -24,7 +25,7 @@ model = None
 feature_stats = None
 prediction_time = None
 recommendations = None
-ckpt_path = 'models/transformer-4M-quantile-how-historical/last-v2.ckpt'
+ckpt_path = 'models/transformer-4M-quantile-how-historical_24/last-v1.ckpt'
 max_hours_back = 24
 
 
@@ -55,10 +56,9 @@ def load_data_and_model():
 
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     
-    prediction_time = datetime.now()
-
-    import pytz
-    prediction_time = prediction_time.replace(minute=0, second=0, microsecond=0, tzinfo=pytz.timezone('Europe/Berlin'))
+    swiss_tz = ZoneInfo("Europe/Zurich")
+    prediction_time = datetime.now(swiss_tz)
+    prediction_time = prediction_time.replace(tzinfo=None)
 
     print(f'Prediction time: {prediction_time}')
 
@@ -110,81 +110,95 @@ def load_data_and_model():
     model_loaded = True
     return "Model and data loaded successfully!"
 
-def generate_recommendations(expected_profit, min_sale_probability):
-    """Generate auction recommendations based on median price and minimum expected profit filter."""
-    print("Generating recommendations...")
-    global df_auctions, model, feature_stats, prediction_time
-    
+
+def generate_recommendations(expected_profit, min_sale_probability, median_discount=1.0):
+    global df_auctions, model, feature_stats, prediction_time, model_loaded, max_hours_back
+
     if not model_loaded:
         load_data_and_model()
-    
-    recommendations = []
-    unique_items = df_auctions['item_index'].unique()
-    print(f"Found {len(unique_items)} unique items")
-    
-    for item_idx in tqdm(unique_items):
-        item_df = df_auctions[df_auctions['item_index'] == item_idx].copy()
-        
-        if item_df.empty:
-            continue
-            
-        # Calculate median price for this item
-        median_price = item_df['buyout'].median() * 0.75
-        
-        # Get the auction with the lowest buyout price
-        min_buyout_idx = item_df['buyout'].idxmin()
-        lowest_auction = item_df.loc[min_buyout_idx].copy()
-        
-        # Calculate potential profit using median price
-        potential_profit = median_price - lowest_auction['buyout']
-        
-        # Filter by minimum expected profit
+
+    df_now = df_auctions[df_auctions["time_offset"] == 0].copy()
+    if df_now.empty:
+        return pd.DataFrame()
+
+    recommendations_list = []
+
+    for item_index, df_now_item in tqdm(df_now.groupby("item_index")):
+        # Cheapest present listing -> buy it
+        cheapest_index = df_now_item["buyout"].idxmin()
+        cheapest_row = df_auctions.loc[cheapest_index].copy()
+        cheapest_buyout = float(cheapest_row["buyout"])
+        auction_id = cheapest_row["id"]
+
+        # Present-only median target price
+        present_median = float(df_now_item["buyout"].median())
+        target_price = present_median * float(median_discount)
+        potential_profit = target_price - cheapest_buyout
         if potential_profit < expected_profit:
             continue
-        
-        # Create a modified version of the item_df with our modified auction using median price
-        modified_item_df = item_df.copy()
-        modified_item_df.loc[min_buyout_idx, 'buyout'] = median_price
-        modified_item_df.loc[min_buyout_idx, 'bid'] = 0
-        modified_item_df.loc[min_buyout_idx, 'time_left'] = 48.0
-        modified_item_df.loc[min_buyout_idx, 'current_hours'] = 0
-        modified_item_df.loc[min_buyout_idx, 'first_appearance'] = prediction_time
-        modified_item_df.loc[min_buyout_idx, 'last_appearance'] = prediction_time
-        
-        # Predict sale probability for all auctions of this item type
-        prediction_df = predict_dataframe(
-            model, 
-            modified_item_df, 
-            prediction_time, 
-            feature_stats
-        )
 
+        # Full per-item context (0..max_hours_back), drop this auction id EVERYWHERE
+        df_item_full = df_auctions[
+            (df_auctions["item_index"] == item_index) &
+            (df_auctions["time_offset"] >= 0) &
+            (df_auctions["time_offset"] <= max_hours_back)
+        ].copy()
+        df_item_full = df_item_full[df_item_full["id"] != auction_id]
+
+        # Fresh relist row at present target price (reuse the same auction id)
+        relist_row = cheapest_row.copy()
+        relist_row["id"] = auction_id
+        relist_row["buyout"] = float(target_price)
+        relist_row["bid"] = 0.0
+        relist_row["time_left"] = 48.0
+        relist_row["current_hours"] = 0.0
+        relist_row["snapshot_time"] = prediction_time
+        relist_row["time_offset"] = 0
+        relist_row["hour_of_week"] = prediction_time.weekday() * 24 + prediction_time.hour
+
+        # Append and predict with full context
+        df_item_full = pd.concat([df_item_full, pd.DataFrame([relist_row])], ignore_index=True)
+
+        prediction_df = predict_dataframe(
+            model=model,
+            df_auctions=df_item_full,
+            prediction_time=prediction_time,
+            feature_stats=feature_stats,
+            max_hours_back=max_hours_back
+        )
         if prediction_df.empty:
             continue
-        
-        modified_auction_prediction = prediction_df.loc[min_buyout_idx]
-        if modified_auction_prediction['sale_probability'] >= min_sale_probability:
-            recommendation = pd.Series({
-                'item_id': lowest_auction['item_id'],
-                'buyout': round(lowest_auction['buyout'], 2),
-                'suggested_price': round(median_price, 2),
-                'quantity': modified_auction_prediction['quantity'],
-                'bonus_lists': modified_auction_prediction['bonus_lists'],
-                'modifier_types': modified_auction_prediction['modifier_types'], 
-                'modifier_values': modified_auction_prediction['modifier_values'],
-                'prediction_q10': modified_auction_prediction['prediction_q10'],
-                'prediction_q50': modified_auction_prediction['prediction_q50'],
-                'prediction_q90': modified_auction_prediction['prediction_q90'],
-                'sale_probability': modified_auction_prediction['sale_probability']
-            })
-            recommendations.append(recommendation)
 
-    if recommendations:
-        recommendations_df = pd.DataFrame(recommendations)
-        recommendations_df = recommendations_df.sort_values('sale_probability', ascending=False)
-        return recommendations_df
-    else:
+        # Select the prediction for our relisted auction by id (unique after the drop)
+        pred_row = prediction_df[prediction_df["id"] == auction_id].iloc[0]
+
+        sale_probability = float(pred_row["sale_probability"])
+        if np.isnan(sale_probability) or sale_probability < min_sale_probability:
+            continue
+
+        recommendation = pd.Series({
+            "item_id": cheapest_row.get("item_id"),
+            "buyout": round(cheapest_buyout, 2),
+            "suggested_price": round(target_price, 2),
+            "quantity": pred_row.get("quantity", cheapest_row.get("quantity")),
+            "bonus_lists": pred_row.get("bonus_lists", relist_row.get("bonus_lists")),
+            "modifier_types": pred_row.get("modifier_types", relist_row.get("modifier_types")),
+            "modifier_values": pred_row.get("modifier_values", relist_row.get("modifier_values")),
+            "prediction_q10": float(pred_row["prediction_q10"]),
+            "prediction_q50": float(pred_row["prediction_q50"]),
+            "prediction_q90": float(pred_row["prediction_q90"]),
+            "sale_probability": sale_probability,
+            "potential_profit": round(potential_profit, 2),
+        })
+        recommendations_list.append(recommendation)
+
+    if not recommendations_list:
         return pd.DataFrame()
+
+    return pd.DataFrame(recommendations_list).sort_values(
+        ["potential_profit", "sale_probability", "prediction_q50"],
+        ascending=[False, False, True]
+    )
 
 def generate_historical_price_recommendations(min_sale_probability):
     """Generate auction recommendations based on historical prices and minimum sale probability."""
@@ -307,7 +321,7 @@ def create_ui():
                 search_button = gr.Button("Search")
                 predict_button = gr.Button("Predict Sale Probability")
             
-            auctions_display = gr.Dataframe(df_auctions.head(100) if df_auctions is not None else pd.DataFrame(), interactive=False)
+            auctions_display = gr.Dataframe(df_auctions.sample(100) if df_auctions is not None else pd.DataFrame(), interactive=False)
             
             def filter_auctions(item_id):
                 if not item_id:

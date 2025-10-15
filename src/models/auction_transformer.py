@@ -181,7 +181,8 @@ class AuctionTransformer(L.LightningModule):
 
         current_hours = current_hours.unsqueeze(-1)  # (B,S,1) 
         time_left = time_left.unsqueeze(-1)      # (B,S,1)
-        weights = torch.exp(-current_hours / 24.0)  # (B, S, 1)
+        weights = ((current_hours == 0) & (time_left == 48.0)).float()
+        #torch.exp(-current_hours / 24.0)  # (B, S, 1)
 
         # ----- Pinball loss over all quantiles -----
         quantile_targets = torch.as_tensor(
