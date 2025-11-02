@@ -8,7 +8,7 @@ import torch.nn.functional as F
 MAX_BONUSES = 9
 MAX_MODIFIERS = 11
 
-def predict_dataframe(model, df_auctions, prediction_time, feature_stats, lambda_value = 0.0401, max_hours_back = 0):
+def predict_dataframe(model, df_auctions, prediction_time, feature_stats, max_hours_back = 0):
     model.eval()
 
     # only use rows the model can embed (context 0..max_hours_back in the past)
@@ -19,7 +19,6 @@ def predict_dataframe(model, df_auctions, prediction_time, feature_stats, lambda
     df_out["prediction_q10"] = np.nan
     df_out["prediction_q50"] = np.nan
     df_out["prediction_q90"] = np.nan
-    df_out["sale_probability"] = np.nan
 
     skipped = set()
 
@@ -97,14 +96,12 @@ def predict_dataframe(model, df_auctions, prediction_time, feature_stats, lambda
             df_out.loc[idx_now, "prediction_q90"] = q[mask_now, 2]
 
             current_hours_now = df_item.loc[mask_now, "current_hours"].to_numpy(dtype=np.float32)
-            sale_prob = np.exp(-lambda_value * (q[mask_now, 1] + current_hours_now))
-            df_out.loc[idx_now, "sale_probability"] = sale_prob
 
     if skipped:
         df_out = df_out[~df_out["id"].isin(skipped)]
 
     # rounding for display (NaNs remain)
-    for col in ["buyout","bid","time_left","current_hours","prediction_q10","prediction_q50","prediction_q90","sale_probability"]:
+    for col in ["buyout","bid","time_left","current_hours","prediction_q10","prediction_q50","prediction_q90"]:
         if col in df_out.columns:
             df_out[col] = np.round(df_out[col].astype(float), 2)
 

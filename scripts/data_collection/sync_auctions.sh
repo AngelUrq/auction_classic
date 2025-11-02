@@ -1,7 +1,7 @@
 #!/bin/bash
 
 REMOTE_USER="pi"
-REMOTE_HOST="192.168.100.206"
+REMOTE_HOST="192.168.50.211"
 REMOTE_AUCTIONS_DIR="/media/pi/USB-DATA/auctions/"
 REMOTE_COMMODITIES_DIR="/media/pi/USB-DATA/commodities/"
 LOCAL_AUCTIONS_DIR="/home/angel/source/auction_classic/data/tww/auctions/"
