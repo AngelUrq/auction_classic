@@ -9,6 +9,15 @@ __pycache__/
 *.pkl
 *.xlsx
 
+data/tww/
+notebooks/wandb/
+.gradio/
+
+.vscode/
+
+notebooks/logs/
+data/sample/
+
 # Ignore all logs
 prediction_engine/logs/*
 
@@ -52,7 +61,7 @@ MANIFEST
 pip-log.txt
 pip-delete-this-directory.txt
 
-models/
+/models/
 ui/sample/
 
 # Unit test / coverage reports

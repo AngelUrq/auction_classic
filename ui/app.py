@@ -1,247 +1,485 @@
 import torch
 import sys
 import os
-import gradio as gr
 import pandas as pd
 import json
-import pickle
 import numpy as np
-import time
+import gradio as gr
 
 from datetime import datetime, timedelta
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 wd = Path(__file__).parent.parent.resolve()
 sys.path.append(str(wd))
 
-from datetime import datetime
-from scripts.utils import get_current_auctions
 from tqdm import tqdm
-from prediction_engine.model import AuctionPredictor
-from prediction_engine.inference import predict_dataframe
+from src.models.inference import predict_dataframe
+from src.data.utils import load_auctions_from_sample
+from src.models.auction_transformer import AuctionTransformer
 
-base_path = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-lambda_value = 0.0401
+model_loaded = False
+df_auctions = None
+model = None
+feature_stats = None
+prediction_time = None
+recommendations = None
+ckpt_path = 'models/transformer-4M-quantile-how-historical_24/last-v1.ckpt'
+max_hours_back = 24
+sold_threshold = 4
 
-with open(os.path.join(base_path, "scripts", "config.json")) as json_data:
-    config = json.load(json_data)
 
-time_left_options = [12, 24, 48]
-
-def load_auctions():
-    if not os.path.exists('auctions.pkl'):
-        print("No saved auction data found, fetching new data...")
-        auction_data = get_current_auctions(config)
-        data_with_timestamp = {
-            'timestamp': datetime.now(),
-            'data': auction_data
-        }
-        with open('auctions.pkl', 'wb') as f:
-            pickle.dump(data_with_timestamp, f)
-        return auction_data
+def load_data_and_model():
+    """Load data and model only once"""
+    global model_loaded, df_auctions, model, feature_stats, prediction_time
     
-    with open('auctions.pkl', 'rb') as f:
-        saved_data = pickle.load(f)
+    if model_loaded:
+        return
     
-    current_time = datetime.now()
-    time_difference = current_time - saved_data['timestamp']
+    base_path = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    data_path = os.path.join(base_path, "data/tww/auctions/")
+
+    # Run sync_auctions script on startup
+    script_path = os.path.join(base_path, "scripts", "data_collection", "sync_auctions.sh")
+    if os.path.exists(script_path):
+        print(f"Running sync_auctions script at {script_path}")
+        os.system(f"bash {script_path}")
+    else:
+        print(f"Error: Script not found at {script_path}")
+
+    time_left_mapping = {
+        'VERY_LONG': 48,
+        'LONG': 12,
+        'MEDIUM': 2,
+        'SHORT': 0.5
+    }
+
+    device = 'cuda' if torch.cuda.is_available() else 'cpu'
     
-    if time_difference > timedelta(hours=1):
-        print("Saved auction data is older than 1 hour, fetching new data...")
-        auction_data = get_current_auctions(config)
-        data_with_timestamp = {
-            'timestamp': current_time,
-            'data': auction_data
-        }
-        with open('auctions.pkl', 'wb') as f:
-            pickle.dump(data_with_timestamp, f)
-        return auction_data
+    swiss_tz = ZoneInfo("Europe/Zurich")
+    prediction_time = datetime.now(swiss_tz)
+    prediction_time = prediction_time.replace(tzinfo=None)
+
+    print(f'Prediction time: {prediction_time}')
+
+    mappings_dir = os.path.join(base_path, 'generated/mappings')
+
+    with open(os.path.join(mappings_dir, 'item_to_idx.json'), 'r') as f:
+        item_to_idx = json.load(f)
+
+    with open(os.path.join(mappings_dir, 'context_to_idx.json'), 'r') as f:
+        context_to_idx = json.load(f)
+        
+    with open(os.path.join(mappings_dir, 'bonus_to_idx.json'), 'r') as f:
+        bonus_to_idx = json.load(f)
+
+    with open(os.path.join(mappings_dir, 'modtype_to_idx.json'), 'r') as f:
+        modtype_to_idx = json.load(f)
+
+    idx_to_item = {v: k for k, v in item_to_idx.items()}
+
+    feature_stats = torch.load(os.path.join(base_path, 'generated/feature_stats.pt'))
+
+    model = AuctionTransformer.load_from_checkpoint(
+        os.path.join(base_path, ckpt_path),
+        map_location=device
+    )
+
+    print(f'Number of model parameters: {sum(p.numel() for p in model.parameters())}')
+    model.eval()
+    print('Pre-trained Transformer model loaded successfully.')
+
+    df_auctions = load_auctions_from_sample(
+        data_path, 
+        prediction_time, 
+        time_left_mapping, 
+        item_to_idx, 
+        context_to_idx, 
+        bonus_to_idx, 
+        modtype_to_idx, 
+        max_hours_back=max_hours_back,
+        include_targets=False
+    )
+    df_auctions['item_id'] = df_auctions['item_index'].map(idx_to_item)
+    print(f'Number of auctions loaded: {len(df_auctions)}')
     
-    return saved_data['data']
+    model_loaded = True
+    return "Model and data loaded successfully!"
 
-auction_data = load_auctions()
-df = pd.DataFrame(auction_data, columns=['id', 'item_id', 'bid', 'buyout', 'quantity', 'time_left', 'rand', 'seed'])
-df = df.drop(columns=['rand', 'seed'])
 
-items_df = pd.read_csv(os.path.join(base_path, "data", "items.csv"))
+def generate_recommendations(expected_profit, median_discount=0.75):
+    global df_auctions, model, feature_stats, prediction_time, model_loaded, max_hours_back
 
-current_timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-df['first_appearance_timestamp'] = current_timestamp
-df['unit_price'] = df['buyout'] / df['quantity']
+    if not model_loaded:
+        load_data_and_model()
 
-df = df.merge(items_df, on='item_id', how='inner')
-df = df.drop(columns=['sell_price_silver', 'purchase_price_silver'], errors='ignore')
+    df_now = df_auctions[df_auctions["time_offset"] == 0].copy()
+    if df_now.empty:
+        return pd.DataFrame()
 
-print("Data loaded and prepared successfully.")
+    recommendations_list = []
 
-n_items = len(items_df)
-item_to_index = {item_id: i + 2 for i, item_id in enumerate(items_df['item_id'])}
-item_to_index[0] = 0 
-item_to_index[1] = 1  
-print(f"Number of unique items: {n_items}")
+    for item_index, df_now_item in tqdm(df_now.groupby("item_index")):
+        # Cheapest present listing -> buy it
+        cheapest_index = df_now_item["buyout"].idxmin()
+        cheapest_row = df_auctions.loc[cheapest_index].copy()
+        cheapest_buyout = float(cheapest_row["buyout"])
+        auction_id = cheapest_row["id"]
 
-time_left_mapping = {
-    'VERY_LONG': 48,
-    'LONG': 12,
-    'MEDIUM': 2,
-    'SHORT': 0.5
-}
+        # Present-only median target price
+        present_median = float(df_now_item["buyout"].median())
+        target_price = present_median * float(median_discount)
+        potential_profit = target_price - cheapest_buyout
+        if potential_profit < expected_profit:
+            continue
 
-device = 'cuda' if torch.cuda.is_available() else 'cpu'
+        # Full per-item context (0..max_hours_back), drop this auction id EVERYWHERE
+        df_item_full = df_auctions[
+            (df_auctions["item_index"] == item_index) &
+            (df_auctions["time_offset"] >= 0) &
+            (df_auctions["time_offset"] <= max_hours_back)
+        ].copy()
+        df_item_full = df_item_full[df_item_full["id"] != auction_id]
 
-model = AuctionPredictor(
-    n_items=len(item_to_index),             
-    input_size=5,                   
-    encoder_hidden_size=2048,
-    decoder_hidden_size=2048,
-    num_layers=3,
-    item_index=3,                   
-    embedding_size=1024,
-    dropout_p=0.2,
-    bidirectional=False
-).to(device)
+        # Fresh relist row at present target price (reuse the same auction id)
+        relist_row = cheapest_row.copy()
+        relist_row["id"] = auction_id
+        relist_row["buyout"] = float(target_price)
+        relist_row["bid"] = 0.0
+        relist_row["time_left"] = 48.0
+        relist_row["current_hours"] = 0.0
+        relist_row["snapshot_time"] = prediction_time
+        relist_row["time_offset"] = 0
+        relist_row["hour_of_week"] = prediction_time.weekday() * 24 + prediction_time.hour
 
-print(f'Number of model parameters: {sum(p.numel() for p in model.parameters())}')
+        # Append and predict with full context
+        df_item_full = pd.concat([df_item_full, pd.DataFrame([relist_row])], ignore_index=True)
 
-model_path = os.path.join(base_path, "models", "checkpoint_epoch_0_iter_51115.pt")
-checkpoint = torch.load(model_path, map_location=device)
+        prediction_df = predict_dataframe(
+            model=model,
+            df_auctions=df_item_full,
+            prediction_time=prediction_time,
+            feature_stats=feature_stats,
+            max_hours_back=max_hours_back
+        )
+        if prediction_df.empty:
+            continue
 
-model.load_state_dict(checkpoint['model_state_dict'])
-model.eval()  
-print('Pre-trained RNN model loaded successfully.')
+        # Select the prediction for our relisted auction by id (unique after the drop)
+        pred_row = prediction_df[prediction_df["id"] == auction_id].iloc[0]
 
-def compute_auctions_appearances(data_dir):
-    print("Computing auction appearances...")
+        if pred_row["prediction_q50"] >= sold_threshold:
+            continue
 
-    file_info = {}
-    auction_appearances = {}
+        recommendation = pd.Series({
+            "item_id": cheapest_row.get("item_id"),
+            "buyout": round(cheapest_buyout, 2),
+            "suggested_price": round(target_price, 2),
+            "quantity": pred_row.get("quantity", cheapest_row.get("quantity")),
+            "bonus_lists": pred_row.get("bonus_lists", relist_row.get("bonus_lists")),
+            "modifier_types": pred_row.get("modifier_types", relist_row.get("modifier_types")),
+            "modifier_values": pred_row.get("modifier_values", relist_row.get("modifier_values")),
+            "prediction_q10": float(pred_row["prediction_q10"]),
+            "prediction_q50": float(pred_row["prediction_q50"]),
+            "prediction_q90": float(pred_row["prediction_q90"]),
+            "potential_profit": round(potential_profit, 2),
+        })
+        recommendations_list.append(recommendation)
 
-    for root, dirs, files in os.walk(data_dir):
-        for filename in tqdm(files):
-            filepath = os.path.join(root, filename)
-            date = datetime.strptime(filename.split('.')[0], '%Y%m%dT%H')
-            file_info[filepath] = date
+    if not recommendations_list:
+        return pd.DataFrame()
 
-    file_info = {k: v for k, v in sorted(file_info.items(), key=lambda item: item[1])}
+    return pd.DataFrame(recommendations_list).sort_values(
+        ["potential_profit", "prediction_q50"],
+        ascending=[False, False]
+    )
+
+def generate_recommendations_ui(expected_profit, threshold):
+    """UI function for generating recommendations"""
+    global recommendations, sold_threshold
     
-    all_auctions = []
+    expected_profit = float(expected_profit)
+    sold_threshold = float(threshold)
     
-    for filepath in list(file_info.keys()):
-        with open(filepath, 'r') as f:
-            try:
-                json_data = json.load(f)
+    recommendations = generate_recommendations(expected_profit)
+    
+    if recommendations.empty:
+        return "No recommendations found matching your criteria. Try lowering the expected profit.", pd.DataFrame()
+    else:
+        return f"Found {len(recommendations)} recommendations!", recommendations
+
+def create_ui():
+    """Create the Gradio interface"""
+    with gr.Blocks(title="🎮 Auction House Data 💰", theme=gr.themes.Default()) as app:
+        gr.Markdown("# Auction House Data")
+        
+        with gr.Tab("Current Auctions"):
+            gr.Markdown("## Current Auctions")
+            
+            with gr.Row():
+                item_search = gr.Textbox(label="Search by Item ID", placeholder="Enter item ID...")
+                search_button = gr.Button("Search")
+                time_offset_filter = gr.Slider(label="Display Time Offset (hours ago)", minimum=0, maximum=48, value=0, step=1)
+                predict_button = gr.Button("Predict Sale Probability")
+                store_csv_button = gr.Button("Store CSV")
+            
+            display_columns = ['item_id', 'buyout', 'quantity', 'time_left', 'context', 'bonus_lists', 'modifier_types', 'modifier_values', 'current_hours', 'time_offset']
+
+            initial_display = pd.DataFrame()
+            if df_auctions is not None:
+                current_slice = df_auctions[df_auctions['time_offset'] == 0]
+                initial_display = current_slice[display_columns].head(100)
+
+            auctions_display = gr.Dataframe(initial_display, interactive=False)
+            store_csv_status = gr.Markdown("")
+            
+            def filter_auctions(item_id, time_offset_value):
+                if df_auctions is None:
+                    return pd.DataFrame()
+
+                item_id = (item_id or "").strip()
+                time_offset_value = float(time_offset_value or 0)
+                filtered_df = df_auctions[df_auctions['time_offset'] == time_offset_value]
+                if item_id:
+                    filtered_df = filtered_df[filtered_df['item_id'] == item_id]
+
+                return filtered_df[display_columns].head(100)
+            
+            def predict_filtered_auctions(item_id, time_offset_value):
+                global model, feature_stats, prediction_time
+
+                if df_auctions is None:
+                    return pd.DataFrame()
+
+                item_id = (item_id or "").strip()
+                time_offset_value = float(time_offset_value or 0)
+
+                if not item_id:
+                    filtered_df = df_auctions.head(100).copy()
+                else:
+                    filtered_df = df_auctions[df_auctions['item_id'] == item_id].copy()
                 
-                if 'auctions' not in json_data:
-                    print(f"File {filepath} does not contain 'auctions' key, skipping.")
-                    continue
+                if filtered_df.empty:
+                    return pd.DataFrame()
+
+                prediction_results = predict_dataframe(
+                    model, 
+                    filtered_df, 
+                    prediction_time, 
+                    feature_stats,
+                    max_hours_back=max_hours_back
+                )
                 
-                auction_data = json_data['auctions']
-                timestamp = file_info[filepath]
+                prediction_results = prediction_results[prediction_results['time_offset'] == 0]
+
+                if prediction_results.empty:
+                    return pd.DataFrame(columns=['item_id', 'buyout', 'quantity', 'time_left', 'context', 'bonus_lists', 'modifier_types', 'modifier_values', 'current_hours', 'prediction_q10', 'prediction_q50', 'prediction_q90'])
+
+                display_columns_prediction = display_columns + ['prediction_q10', 'prediction_q50', 'prediction_q90']
+                return prediction_results[display_columns_prediction].head(100)
+
+            def store_item_csv(item_id, _time_offset_value):
+                if df_auctions is None:
+                    return "No auctions loaded yet."
+
+                item_id = (item_id or "").strip()
+                if not item_id:
+                    return "Please provide an item ID before storing."
+
+                item_df = df_auctions[df_auctions['item_id'] == item_id].copy()
+                if item_df.empty:
+                    return f"No rows found for item {item_id}."
+
+                item_df = item_df.sort_values("current_hours")
+
+                output_dir = Path(__file__).resolve().parent.parent / "generated"
+                output_dir.mkdir(parents=True, exist_ok=True)
+
+                output_path = output_dir / f"{item_id}.csv"
+                item_df.to_csv(output_path, index=False)
+
+                return f"Stored {len(item_df)} rows to {output_path}."
+            
+            search_button.click(
+                filter_auctions,
+                inputs=[item_search, time_offset_filter],
+                outputs=[auctions_display]
+            )
+
+            time_offset_filter.change(
+                filter_auctions,
+                inputs=[item_search, time_offset_filter],
+                outputs=[auctions_display]
+            )
+            
+            predict_button.click(
+                predict_filtered_auctions,
+                inputs=[item_search, time_offset_filter],
+                outputs=[auctions_display]
+            )
+
+            store_csv_button.click(
+                store_item_csv,
+                inputs=[item_search, time_offset_filter],
+                outputs=[store_csv_status]
+            )
+        
+        with gr.Tab("Recommendations"):
+            gr.Markdown("## Auction Recommendations")
+            gr.Markdown("This tab recommends items to flip using their **median price** as the suggested selling price.")
+            gr.Markdown("Only items with potential profit >= your minimum expected profit filter will be shown.")
+            gr.Markdown("**Prediction columns explained:**")
+            gr.Markdown("- **prediction_q10**: 10th percentile prediction (pessimistic - 90% chance it takes longer)")
+            gr.Markdown("- **prediction_q50**: 50th percentile prediction (median)")
+            gr.Markdown("- **prediction_q90**: 90th percentile prediction (optimistic - 90% chance it sells faster)")
+            gr.Markdown(f"Items are considered likely to sell if prediction_q50 < {sold_threshold} hours")
+            
+            with gr.Row():
+                expected_profit = gr.Number(label="Minimum Expected Profit Filter (gold)", value=100, minimum=0, step=100)
+                sold_threshold_input = gr.Slider(label="Sale Time Threshold (hours)", minimum=1, maximum=24, value=4, step=1)
+        
+            generate_button = gr.Button("Generate Recommendations")
+            result_text = gr.Markdown()
+            recommendations_output = gr.Dataframe()
+            
+            generate_button.click(
+                generate_recommendations_ui, 
+                inputs=[expected_profit, sold_threshold_input], 
+                outputs=[result_text, recommendations_output]
+            )
+        
+        with gr.Tab("Individual Flipping"):
+            gr.Markdown("## Individual Item Flipping Recommendations")
+            gr.Markdown("**Prediction columns explained:**")
+            gr.Markdown("- **predicted_hours_q10**: 10th percentile (optimistic timing)")
+            gr.Markdown("- **predicted_hours_q50**: 50th percentile (median hours to sale)")
+            gr.Markdown("- **predicted_hours_q90**: 90th percentile (pessimistic timing)")
+            
+            with gr.Row():
+                flip_item_search = gr.Textbox(label="Search by Item ID", placeholder="Enter item ID...")
+                flip_search_button = gr.Button("Search")
+            
+            item_auctions_display = gr.Dataframe(interactive=False)
+            
+            with gr.Row():
+                custom_buyout = gr.Number(label="Custom Buyout Price (gold)", value=0, minimum=0, step=100)
+                predict_flip_button = gr.Button("Predict Flip")
+            
+            flip_result = gr.Dataframe(interactive=False)
+            
+            def search_item_for_flip(item_id):
+                global df_auctions
+
+                if not model_loaded:
+                    load_data_and_model()
+
+                item_id = (item_id or "").strip()
+                if not item_id or df_auctions is None:
+                    return pd.DataFrame()
                 
-                for auction in auction_data:
-                    auction_id = int(auction['id'])
-                    auction['timestamp'] = timestamp.strftime("%Y-%m-%d %H:%M:%S")
-                    
-                    if auction_id not in auction_appearances:
-                        auction_appearances[auction_id] = {'first': timestamp, 'last': timestamp}
-                    else:
-                        auction_appearances[auction_id]['last'] = timestamp
+                filtered_df = df_auctions[
+                    (df_auctions['item_id'] == item_id) &
+                    (df_auctions['time_offset'] == 0)
+                ]
+                display_columns = ['item_id', 'buyout', 'quantity', 'time_left', 'context', 'bonus_lists', 'modifier_types', 'modifier_values']
+                return filtered_df[display_columns]            
+            def predict_item_flip(item_id, custom_price):
+                global model, feature_stats, prediction_time, max_hours_back, df_auctions
+
+                if not model_loaded:
+                    load_data_and_model()
+
+                item_id = (item_id or "").strip()
+                if not item_id or df_auctions is None:
+                    return pd.DataFrame()
+
+                item_df = df_auctions[df_auctions['item_id'] == item_id].copy()
                 
-                all_auctions.extend(auction_data)
-            except json.JSONDecodeError as e:
-                print(f"Error loading file {filepath}: {e}")
-                continue
-            except Exception as e:
-                print(f"Unexpected error loading file {filepath}: {e}")
-                continue
+                if item_df.empty:
+                    print("No auctions found for this item")
+                    return pd.DataFrame()
 
-    print("Auction appearances computed successfully.")
-    return auction_appearances
+                min_buyout_idx = item_df['buyout'].astype(float).idxmin()
+                lowest_auction = item_df.loc[min_buyout_idx].copy()
 
-auction_appearances = compute_auctions_appearances(os.path.join(base_path, "ui", "sample"))
+                target_price = float(custom_price or 0)
+                if target_price <= 0:
+                    target_price = float(lowest_auction['buyout'])
 
-def predict_item_sale(realm_id, faction, item_id, quantity, buyout, bid, time_left):
-    raise NotImplementedError("This function hasn't been implemented yet")
+                auction_id = lowest_auction['id']
+                item_index = lowest_auction['item_index']
 
-    item_id = int(item_id)
-    item_auctions = df[df['item_id'] == item_id]
+                df_item_full = df_auctions[
+                    (df_auctions['item_index'] == item_index) &
+                    (df_auctions['time_offset'] >= 0) &
+                    (df_auctions['time_offset'] <= max_hours_back)
+                ].copy()
 
-    single_item_df = pd.DataFrame({
-        'id': [0],
-        'item_id': [item_id],
-        'bid': [bid],
-        'buyout': [buyout],
-        'quantity': [quantity],
-        'time_left': time_left,
-        'hours_since_first_appearance': [0],
-    })
+                df_item_full = df_item_full[df_item_full['id'] != auction_id]
 
-    single_item_df['item_id'] = single_item_df['item_id'].astype(int)
-    items_df['item_id'] = items_df['item_id'].astype(int)
+                # New relist row mirrors recommendation flow
+                relist_row = lowest_auction.copy()
+                relist_row['buyout'] = float(target_price)
+                relist_row['bid'] = 0.0
+                relist_row['time_left'] = 48.0
+                relist_row['current_hours'] = 0.0
+                relist_row['snapshot_time'] = prediction_time
+                relist_row['time_offset'] = 0
+                relist_row['hour_of_week'] = prediction_time.weekday() * 24 + prediction_time.hour
 
-    single_item_df = single_item_df.merge(items_df, on='item_id', how='left')
-    merged_df = pd.concat([item_auctions, single_item_df], ignore_index=True)
+                df_item_full = pd.concat([df_item_full, pd.DataFrame([relist_row])], ignore_index=True)
 
-    return f"Your item has a sale probability of {sale_probability * 100:.2f}%. Estimated sale time {prediction:.2f} hours."
+                prediction_df = predict_dataframe(
+                    model, 
+                    df_item_full, 
+                    prediction_time, 
+                    feature_stats,
+                    max_hours_back=max_hours_back
+                )
+
+                if prediction_df.empty:
+                    print("No prediction found for this item")
+                    return pd.DataFrame()
+
+                flip_prediction = prediction_df[
+                    (prediction_df['id'] == auction_id) &
+                    (~prediction_df['prediction_q50'].isna())
+                ]
+
+                if flip_prediction.empty:
+                    print("No prediction found for this item")
+                    return pd.DataFrame()
+
+                flip_prediction = flip_prediction.iloc[0]
+                
+                result = pd.DataFrame([{
+                    'item_id': lowest_auction['item_id'],
+                    'quantity': lowest_auction['quantity'],
+                    'original_price': round(float(lowest_auction['buyout']), 2),
+                    'custom_price': round(float(target_price), 2),
+                    'potential_profit': round(float(target_price) - float(lowest_auction['buyout']), 2),
+                    'predicted_hours_q10': flip_prediction['prediction_q10'],
+                    'predicted_hours_q50': flip_prediction['prediction_q50'],
+                    'predicted_hours_q90': flip_prediction['prediction_q90']
+                }])
+                
+                return result            
+            flip_search_button.click(
+                search_item_for_flip,
+                inputs=[flip_item_search],
+                outputs=[item_auctions_display]
+            )
+            
+            predict_flip_button.click(
+                predict_item_flip,
+                inputs=[flip_item_search, custom_buyout],
+                outputs=[flip_result]
+            )
+            
+    return app
+
+if __name__ == "__main__":
+    load_data_and_model()
     
-
-def get_suggested_items(realm_id, faction, item_class, item_subclass, desired_profit, sale_probability, price_filter_max):
-    suggested_items = df.copy()
-
-    if item_class:
-        suggested_items = suggested_items[(suggested_items['item_class'] == item_class)]
-    if item_subclass:
-        suggested_items = suggested_items[(suggested_items['item_subclass'] == item_subclass)]
-
-    print(f"Number of items after filtering: {len(suggested_items)}")
-
-    prediction_time = datetime.now()
-    prediction_time = prediction_time.replace(minute=0, second=0, microsecond=0)
-
-    suggested_items['first_appearance'] = suggested_items['id'].apply(lambda x: auction_appearances[int(x)]['first'] if x in auction_appearances else prediction_time)
-    suggested_items['hours_since_first_appearance'] = (prediction_time - pd.to_datetime(suggested_items['first_appearance'])).dt.total_seconds() / 3600
-
-    print("Predicting sale times for items...")
-    suggested_items = predict_dataframe(model, suggested_items, prediction_time, time_left_mapping, item_to_index, lambda_value, device)    
-
-    if price_filter_max:
-        suggested_items = suggested_items[suggested_items['buyout'] <= price_filter_max]
-
-    if sale_probability:
-        suggested_items = suggested_items[suggested_items['sale_probability'] >= sale_probability]
-
-    suggested_items = suggested_items.sort_values(by='sale_probability', ascending=False)
-
-    return suggested_items[['item_name', 'item_class', 'item_subclass', 'bid', 'buyout', 'quantity', 'time_left', 'first_appearance', 'hours_since_first_appearance', 'prediction', 'sale_probability']]
-
-
-with gr.Blocks(title="Auction Tools") as demo:
-    gr.Markdown("## Maximize your auction profits!")
-
-    with gr.Tab("Sale Prediction"):
-        gr.Markdown("### Predict when your item will sell")
-        realm_id_input = gr.Textbox(label="Realm ID", value=str(config["realm_id"]))
-        faction_input = gr.Radio(["Alliance", "Horde"], label="Faction", value="Alliance")
-        item_input = gr.Textbox(label="Item ID")
-        quantity_input = gr.Number(label="Quantity")
-        buyout_input = gr.Number(label="Buyout")
-        bid_input = gr.Number(label="Bid")
-        time_left_input = gr.Dropdown(time_left_options, label="Time Left")
-        predict_button = gr.Button("Predict")
-        prediction_output = gr.Textbox(label="AI Prediction")
-        predict_button.click(predict_item_sale, inputs=[realm_id_input, faction_input, item_input, quantity_input, buyout_input, bid_input, time_left_input], outputs=prediction_output)
-
-    with gr.Tab("Resale Suggestions"):
-        gr.Markdown("### Discover resale opportunities")
-        realm_id_input = gr.Textbox(label="Realm ID", value=str(config["realm_id"]))
-        faction_input = gr.Radio(["Alliance", "Horde"], label="Faction", value="Horde")
-        item_class_input = gr.Dropdown(choices=items_df['item_class'].unique().tolist(), label="Item Class", multiselect=False)
-        item_subclass_input = gr.Dropdown(choices=items_df['item_subclass'].unique().tolist(), label="Item Subclass", multiselect=False)
-        desired_profit_input = gr.Number(label="Desired Profit (Gold)")
-        sale_probability_input = gr.Slider(label="Minimum Sale Probability (%)", minimum=0, maximum=100, step=1, value=80)
-        price_filter_max_input = gr.Number(label="Maximum Original Buyout Price (Gold)", value=500)
-        suggest_button = gr.Button("Suggest Items")
-        suggested_items_output = gr.DataFrame(label="Suggested Items", interactive=False, height=300)
-        suggest_button.click(lambda realm, faction, item_class, item_subclass, profit, sale_probability, price_filter_max: get_suggested_items(realm, faction, item_class, item_subclass, profit, sale_probability / 100.0, price_filter_max), inputs=[realm_id_input, faction_input, item_class_input, item_subclass_input, desired_profit_input, sale_probability_input, price_filter_max_input], outputs=suggested_items_output)
-
-demo.launch(share=False)
+    app = create_ui()
+    app.launch(share=True)
