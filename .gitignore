@@ -12,6 +12,9 @@ __pycache__/
 data/tww/
 notebooks/wandb/
 .gradio/
+wandb/
+lightning_logs/
+outputs/
 
 .vscode/
 
