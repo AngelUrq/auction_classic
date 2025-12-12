@@ -11,6 +11,7 @@ import torch
 import yaml
 from lightning.pytorch.callbacks import ModelCheckpoint
 from lightning.pytorch.loggers import WandbLogger
+from functools import partial
 from omegaconf import DictConfig, OmegaConf
 
 logging.basicConfig(
@@ -128,6 +129,10 @@ def create_dataloaders(
 
     num_workers = cfg.training.num_workers
     prefetch = cfg.data.prefetch_factor if num_workers > 0 else None
+    collate_fn = partial(
+        collate_auctions,
+        max_sequence_length=int(cfg.data.max_sequence_length),
+    )
 
     if cfg.data.bucket_sampling:
         logger.info(f"  Using bucket sampling with {cfg.data.num_buckets} buckets")
@@ -157,7 +162,7 @@ def create_dataloaders(
         train_dataloader = torch.utils.data.DataLoader(
             train_dataset,
             batch_sampler=train_sampler,
-            collate_fn=collate_auctions,
+            collate_fn=collate_fn,
             num_workers=num_workers,
             prefetch_factor=prefetch,
             pin_memory=False,
@@ -166,7 +171,7 @@ def create_dataloaders(
         val_dataloader = torch.utils.data.DataLoader(
             val_dataset,
             batch_sampler=val_sampler,
-            collate_fn=collate_auctions,
+            collate_fn=collate_fn,
             num_workers=num_workers,
             prefetch_factor=prefetch,
             pin_memory=False,
@@ -178,7 +183,7 @@ def create_dataloaders(
             train_dataset,
             batch_size=cfg.training.batch_size,
             shuffle=True,
-            collate_fn=collate_auctions,
+            collate_fn=collate_fn,
             num_workers=num_workers,
             prefetch_factor=prefetch,
             pin_memory=False,
@@ -188,7 +193,7 @@ def create_dataloaders(
             val_dataset,
             batch_size=cfg.training.batch_size,
             shuffle=False,
-            collate_fn=collate_auctions,
+            collate_fn=collate_fn,
             num_workers=num_workers,
             prefetch_factor=prefetch,
             pin_memory=False,

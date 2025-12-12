@@ -16,6 +16,8 @@ wandb/
 lightning_logs/
 outputs/
 
+setup.sh
+
 .vscode/
 
 notebooks/logs/

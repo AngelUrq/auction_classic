@@ -8,6 +8,7 @@ data:
   train_split: 0.95
   train_fraction: 0.90
   max_hours_back: 24
+  max_sequence_length: 1024
   bucket_sampling: true  # Group similar-length sequences to reduce padding waste
   num_buckets: 20        # Number of length buckets (only used if bucket_sampling=true)
   prefetch_factor: 8
@@ -23,7 +24,7 @@ training:
   checkpoint_every: 10000
   log_every: 10
   logging_interval: 1000
-  num_workers: 4
+  num_workers: 8
 
 model:
   input_size: 5

@@ -181,7 +181,6 @@ class AuctionTransformer(L.LightningModule):
 
         current_hours = current_hours.unsqueeze(-1)  # (B,S,1) 
         time_left = time_left.unsqueeze(-1)      # (B,S,1)
-        weights = torch.exp(-current_hours / 24.0)  # (B, S, 1)
 
         # ----- Pinball loss over all quantiles -----
         quantile_targets = torch.as_tensor(
@@ -194,7 +193,7 @@ class AuctionTransformer(L.LightningModule):
             (quantile_targets - 1.0) * prediction_errors
         )  # (B, S, Q)
 
-        pinball_loss = (quantile_losses * loss_mask * weights).sum() / (loss_mask * weights).sum().clamp_min(1e-6)
+        pinball_loss = (quantile_losses * loss_mask).sum() / (loss_mask).sum().clamp_min(1e-6)
 
         # ----- Metrics computed on the median (tau=0.5) channel -----
         median_index = self.quantiles.index(0.5)
