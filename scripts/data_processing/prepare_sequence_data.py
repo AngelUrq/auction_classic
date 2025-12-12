@@ -18,10 +18,13 @@ TIME_LEFT_TO_INT = {
 
 MAX_BONUSES = 9
 MAX_MODIFIERS = 11
-MAX_SEQUENCE_LENGTH = 128
+MAX_SEQUENCE_LENGTH = 1024
 ROW_CHUNK = 1024
 
-exclude_first_times = ['01-05-2025', '20-08-2025','21-08-2025','22-08-2025']
+# We exclude the first times of these days because their data is not complete.
+# current_hours is not available for these days as you need to wait 48 hours to get it.
+# We also exclude the last days because if you publish an auction in the last day, you can't get the hours_on_sale.
+exclude_first_times = ['01-06-2025', '02-06-2025', '30-07-2025', '31-07-2025']
 last_exclude_date = datetime.strptime(exclude_first_times[-1], '%d-%m-%Y')
 
 
@@ -267,7 +270,6 @@ def process_auctions(args):
         del day_items, indices_rows
         gc.collect()
 
-    # CSV -> Parquet
     if os.path.exists(csv_path):
         print('Converting CSV to Parquet...', flush=True)
         gc.collect()

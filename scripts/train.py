@@ -237,10 +237,18 @@ def create_model(mappings: dict, cfg: DictConfig) -> tuple[AuctionTransformer, i
     return model, param_count
 
 
-def generate_run_name(param_count: int, max_hours_back: int) -> str:
+def format_learning_rate(lr: float) -> str:
+    """Format learning rate for run names (keeps names concise and filesystem-friendly)."""
+    if lr < 1e-3:
+        return f"{lr:.0e}".replace("+0", "").replace("+", "")
+    return f"{lr:g}"
+
+
+def generate_run_name(param_count: int, max_hours_back: int, learning_rate: float, batch_size: int) -> str:
     """Generate run name based on parameters and config."""
     param_str = format_param_count(param_count)
-    return f"transformer-{param_str}-quantile-historical_{max_hours_back}"
+    lr_str = format_learning_rate(learning_rate)
+    return f"transformer-{param_str}-quantile-historical_{max_hours_back}-lr{lr_str}-bs{batch_size}"
 
 
 def load_config(config_path: Path) -> DictConfig:
@@ -273,10 +281,6 @@ def main():
     
     cfg = load_config(Path(args.config))
     
-    # Override resume from command line if provided
-    if args.resume:
-        cfg.resume = args.resume
-    
     logger.info("\n" + OmegaConf.to_yaml(cfg))
 
     data_dir = repo_root / cfg.data.dir
@@ -294,7 +298,12 @@ def main():
     else:
         model, param_count = create_model(mappings, cfg)
 
-    run_name = generate_run_name(param_count, cfg.data.max_hours_back)
+    run_name = generate_run_name(
+        param_count,
+        cfg.data.max_hours_back,
+        float(cfg.training.learning_rate),
+        int(cfg.training.batch_size),
+    )
 
     logger.info("=" * 60)
     logger.info("Auction Transformer Training")
@@ -341,7 +350,7 @@ def main():
         devices=cfg.hardware.devices,
         log_every_n_steps=cfg.training.log_every,
         logger=wandb_logger,
-        #limit_val_batches=cfg.training.limit_val_batches,
+        limit_val_batches=cfg.training.limit_val_batches,
         val_check_interval=cfg.training.val_check_interval,
         precision=cfg.training.precision,
         callbacks=[checkpoint_callback],
