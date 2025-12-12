@@ -8,15 +8,18 @@ data:
   train_split: 0.95
   train_fraction: 0.90
   max_hours_back: 24
+  bucket_sampling: true  # Group similar-length sequences to reduce padding waste
+  num_buckets: 20        # Number of length buckets (only used if bucket_sampling=true)
+  prefetch_factor: 8
 
 training:
   num_epochs: 1
-  batch_size: 16
+  batch_size: 64
   learning_rate: 1e-4
   gradient_clip: 3.0
   precision: bf16-mixed
   val_check_interval: 0.1
-  limit_val_batches: 500
+  limit_val_batches: 3000
   checkpoint_every: 10000
   log_every: 10
   logging_interval: 1000

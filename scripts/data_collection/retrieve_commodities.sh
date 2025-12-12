@@ -3,8 +3,8 @@
 echo "Retrieving token"
 
 # Configuration
-client_key="c39078bd5f0f4e798a3a1b734dd9d280"
-secret_key="4UEplhA8jYa8wvX58C5QdV7JDTDY9rNX"
+client_key=""
+secret_key=""
 
 # Get OAuth token
 token=`curl -u $client_key:$secret_key -d grant_type=client_credentials https://us.battle.net/oauth/token | jq -r '.access_token'`

@@ -166,7 +166,7 @@ class AuctionTransformer(L.LightningModule):
         features = torch.cat([auctions, item_embeddings_conditioned], dim=-1)       # (B,S,input_size + D)
         X = self.input_projection(features)                                         # (B,S,d_model)
         
-        X = self.encoder(X, src_key_padding_mask=attention_mask)
+        X = self.encoder(X, src_key_padding_mask=attention_mask.bool())
         X = self.output_projection(X)
 
         return X

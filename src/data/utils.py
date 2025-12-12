@@ -9,8 +9,8 @@ import pandas as pd
 from tqdm import tqdm
 from datetime import timedelta, datetime
 
-CLIENT_KEY = "c39078bd5f0f4e798a3a1b734dd9d280"
-SECRET_KEY = "4UEplhA8jYa8wvX58C5QdV7JDTDY9rNX"
+CLIENT_KEY = ""
+SECRET_KEY = ""
 REALM_ID = "3676"
 
 import torch
@@ -28,7 +28,7 @@ def _crop_and_pad(field_list, L: int, pad_value=0):
     cropped = [_crop_left(t, L) for t in field_list]
     return pad_sequence(cropped, batch_first=True, padding_value=pad_value)
 
-def collate_auctions(batch, max_sequence_length=8192, pad_value=0):
+def collate_auctions(batch, max_sequence_length=1024, pad_value=0):
     """Collate function: crop from the left, pad to the right (batch max length ≤ L)."""
     L = max_sequence_length
 
@@ -123,13 +123,11 @@ def load_auctions_from_sample(
     max_hours_back=0,
     include_targets=True
 ):
-    # ---- define window ----
     past_hours = 48 + max_hours_back
     future_hours = 48 + max_hours_back if include_targets else 0
     window_start = prediction_time - timedelta(hours=past_hours)
     window_end = prediction_time + timedelta(hours=future_hours)
 
-    # ---- collect files in window (sorted) ----
     file_info = {}
     for root, dirs, files in os.walk(data_dir):
         for filename in files:
