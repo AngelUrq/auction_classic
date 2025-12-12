@@ -7,7 +7,7 @@ data:
   date_end: "2025-09-01"
   train_split: 0.95
   train_fraction: 0.90
-  max_hours_back: 24
+  max_hours_back: 120 # 5 days
   max_sequence_length: 1024
   bucket_sampling: true  # Group similar-length sequences to reduce padding waste
   num_buckets: 20        # Number of length buckets (only used if bucket_sampling=true)
@@ -17,6 +17,7 @@ training:
   num_epochs: 1
   batch_size: 64
   learning_rate: 1e-4
+  use_lr_scheduler: true
   gradient_clip: 3.0
   precision: bf16-mixed
   val_check_interval: 0.1

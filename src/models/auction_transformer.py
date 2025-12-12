@@ -27,6 +27,7 @@ class AuctionTransformer(L.LightningModule):
         log_raw_batch_data: bool = False,
         log_step_predictions: bool = False,
         max_hours_back: int = 0,
+        use_lr_scheduler: bool = True,
     ):
         super().__init__()
 
@@ -88,6 +89,7 @@ class AuctionTransformer(L.LightningModule):
         self.log_raw_batch_data = log_raw_batch_data
         self.log_step_predictions = log_step_predictions
         self.quantiles = quantiles
+        self.use_lr_scheduler = use_lr_scheduler
 
     def forward(self, X):
         (auctions, item_index, contexts, bonus_lists, modifier_types, modifier_values, hour_of_week, time_offset) = X
@@ -455,6 +457,9 @@ class AuctionTransformer(L.LightningModule):
 
         print(f'total steps: {self.trainer.estimated_stepping_batches}')
         
+        if not self.use_lr_scheduler:
+            return optimizer
+
         scheduler = {
             "scheduler": torch.optim.lr_scheduler.OneCycleLR(
                 optimizer,
