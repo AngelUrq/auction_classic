@@ -8,10 +8,9 @@ import torch.nn.functional as F
 MAX_BONUSES = 9
 MAX_MODIFIERS = 11
 
-def predict_dataframe(model, df_auctions, prediction_time, feature_stats, max_hours_back = 0):
+def predict_dataframe(model, df_auctions, prediction_time, feature_stats, max_hours_back = 0, max_sequence_length = 4096):
     model.eval()
 
-    # only use rows the model can embed (context 0..max_hours_back in the past)
     df = df_auctions[(df_auctions["time_offset"] >= 0) & (df_auctions["time_offset"] <= max_hours_back)].copy()
     grouped = {idx: g for idx, g in df.groupby("item_index")}
 
@@ -25,7 +24,10 @@ def predict_dataframe(model, df_auctions, prediction_time, feature_stats, max_ho
     for auction_id, df_item in grouped.items():
         df_item = df_item.sort_values("time_offset")
 
-        # -------- scalar features --------
+        if len(df_item) > max_sequence_length:
+            print(f"Sequence too long: {len(df_item)}")
+            continue
+
         features_np = np.stack([
             np.log1p(df_item["bid"].to_numpy(dtype=np.float32)),
             np.log1p(df_item["buyout"].to_numpy(dtype=np.float32)),
@@ -37,18 +39,15 @@ def predict_dataframe(model, df_auctions, prediction_time, feature_stats, max_ho
         features = torch.tensor(features_np, dtype=torch.float32, device=model.device)
         features = (features - feature_stats["means"][:5].to(model.device)) / (feature_stats["stds"][:5].to(model.device) + 1e-6)
 
-        # -------- categorical / set features --------
         item_indices = torch.tensor(df_item["item_index"].to_numpy(), dtype=torch.long, device=model.device)
         contexts = torch.tensor(df_item["context"].to_numpy(), dtype=torch.long, device=model.device)
 
-        # bonuses: lists guaranteed; slice/pad to MAX_BONUSES
         bonus_lists_np = np.asarray([
             (row_bonuses[:MAX_BONUSES] + [0] * (MAX_BONUSES - len(row_bonuses)))
             for row_bonuses in df_item["bonus_lists"]
         ], dtype=np.int64)
         bonus_lists = torch.tensor(bonus_lists_np, dtype=torch.long, device=model.device)
 
-        # modifiers: lists guaranteed; slice/pad to MAX_MODIFIERS
         modifier_types_np = np.asarray([
             (row_types[:MAX_MODIFIERS] + [0] * (MAX_MODIFIERS - len(row_types)))
             for row_types in df_item["modifier_types"]
@@ -63,7 +62,6 @@ def predict_dataframe(model, df_auctions, prediction_time, feature_stats, max_ho
         modifier_values = torch.log1p(modifier_values)
         modifier_values = (modifier_values - feature_stats["modifiers_mean"].to(model.device)) / (feature_stats["modifiers_std"].to(model.device) + 1e-6)
 
-        # temporal inputs
         hour_of_week = torch.tensor(df_item["hour_of_week"].to_numpy(), dtype=torch.long, device=model.device)
         time_offset = torch.tensor(
             np.clip(df_item["time_offset"].to_numpy(), 0, max_hours_back),
@@ -71,7 +69,6 @@ def predict_dataframe(model, df_auctions, prediction_time, feature_stats, max_ho
             device=model.device
         )
 
-        # pack (batch = 1)
         X = (
             features.unsqueeze(0),
             item_indices.unsqueeze(0),
@@ -83,10 +80,8 @@ def predict_dataframe(model, df_auctions, prediction_time, feature_stats, max_ho
             time_offset.unsqueeze(0),
         )
 
-        # (B, S, Q) -> (S, Q)
         y_pred_quantiles = model(X)[0]
 
-        # write predictions only for "now" rows (time_offset == 0)
         mask_now = (df_item["time_offset"].to_numpy() == 0)
         if mask_now.any():
             q = y_pred_quantiles.detach().cpu().numpy()
@@ -100,7 +95,6 @@ def predict_dataframe(model, df_auctions, prediction_time, feature_stats, max_ho
     if skipped:
         df_out = df_out[~df_out["id"].isin(skipped)]
 
-    # rounding for display (NaNs remain)
     for col in ["buyout","bid","time_left","current_hours","prediction_q10","prediction_q50","prediction_q90"]:
         if col in df_out.columns:
             df_out[col] = np.round(df_out[col].astype(float), 2)

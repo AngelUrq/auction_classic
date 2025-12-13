@@ -23,13 +23,22 @@ def _crop_left(t: torch.Tensor, L: int) -> torch.Tensor:
         return t[-L:]
     return t
 
-def _crop_and_pad(field_list, L: int, pad_value=0):
-    """Crop each sequence to max L (from the left), then right-pad to batch max length (≤ L)."""
-    cropped = [_crop_left(t, L) for t in field_list]
+def _crop_and_pad(field_list, L: int | None, pad_value=0):
+    """
+    Crop each sequence to max L (from the left), then right-pad to batch max length.
+    If L is None, do not crop—pad to the longest sequence in the batch.
+    """
+    if L is not None:
+        cropped = [_crop_left(t, L) for t in field_list]
+    else:
+        cropped = field_list
+        if not cropped:
+            return pad_sequence([], batch_first=True, padding_value=pad_value)
+        L = max(t.size(0) for t in cropped)
     return pad_sequence(cropped, batch_first=True, padding_value=pad_value)
 
-def collate_auctions(batch, max_sequence_length=1024, pad_value=0):
-    """Collate function: crop from the left, pad to the right (batch max length ≤ L)."""
+def collate_auctions(batch, max_sequence_length=None, pad_value=0):
+    """Collate function: optionally crop from the left, then pad to batch max length."""
     L = max_sequence_length
 
     auctions       = _crop_and_pad([b['auctions']          for b in batch], L, pad_value)
