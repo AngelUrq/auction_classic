@@ -23,6 +23,8 @@ class AuctionTransformer(L.LightningModule):
         dropout_p: float = 0.1,
         learning_rate: float = 1e-4,
         quantiles: list[float] = [0.1, 0.5, 0.9],
+        classification_threshold_hours: float = 8.0,
+        classification_loss_weight: float = 1.0,
         logging_interval: int = 1000,
         log_raw_batch_data: bool = False,
         log_step_predictions: bool = False,
@@ -34,10 +36,18 @@ class AuctionTransformer(L.LightningModule):
         self.save_hyperparameters()
 
         self.input_projection = nn.Linear(input_size + embedding_dim, d_model)
-        self.output_projection = nn.Sequential(
+        
+        self.regression_projection = nn.Sequential(
             nn.Linear(d_model, d_model * 4),
             nn.ReLU(),
             nn.Linear(d_model * 4, len(quantiles))
+        )
+        
+        self.classification_projection = nn.Sequential(
+            nn.Linear(d_model, d_model * 2),
+            nn.ReLU(),
+            nn.Dropout(dropout_p),
+            nn.Linear(d_model * 2, 1)
         )
 
         self.item_embeddings = nn.Embedding(n_items, embedding_dim)
@@ -90,6 +100,8 @@ class AuctionTransformer(L.LightningModule):
         self.log_step_predictions = log_step_predictions
         self.quantiles = quantiles
         self.use_lr_scheduler = use_lr_scheduler
+        self.classification_threshold_hours = classification_threshold_hours
+        self.classification_loss_weight = classification_loss_weight
 
     def forward(self, X):
         (auctions, item_index, contexts, bonus_lists, modifier_types, modifier_values, hour_of_week, time_offset) = X
@@ -169,12 +181,81 @@ class AuctionTransformer(L.LightningModule):
         X = self.input_projection(features)                                         # (B,S,d_model)
         
         X = self.encoder(X, src_key_padding_mask=attention_mask.bool())
-        X = self.output_projection(X)
+        
+        # Compute both outputs
+        regression_output = self.regression_projection(X)
+        classification_output = self.classification_projection(X)
 
-        return X
+        return regression_output, classification_output
 
-    def _compute_loss_and_metrics(self, y_hat, y, item_index, current_hours, time_left, time_offset):
-        """Compute loss and metrics for both training and validation."""
+    def _compute_classification_loss_and_metrics(self, y_hat_classification, y, loss_mask):
+        """Compute binary classification loss and metrics.
+        
+        Args:
+            y_hat_classification: Classification logits (B, S, 1)
+            y: Target durations in hours (B, S)
+            loss_mask: Mask for valid items (B, S, 1)
+            
+        Returns:
+            Dictionary with keys: loss, accuracy, precision, recall, f1
+        """
+        # Create binary labels: 1 if item lasts < threshold hours, 0 otherwise
+        labels = (y < self.classification_threshold_hours).float().unsqueeze(-1)  # (B, S, 1)
+        
+        # Compute binary cross-entropy loss
+        classification_loss = nn.functional.binary_cross_entropy_with_logits(
+            y_hat_classification * loss_mask,
+            labels * loss_mask,
+            reduction='sum'
+        ) / loss_mask.sum().clamp_min(1e-6)
+        
+        with torch.no_grad():
+            # Get predictions (apply sigmoid and threshold at 0.5)
+            predictions = (torch.sigmoid(y_hat_classification) > 0.5).float()  # (B, S, 1)
+            
+            # Apply mask to get valid predictions and labels
+            valid_predictions = predictions * loss_mask
+            valid_labels = labels * loss_mask
+            
+            # Compute metrics
+            true_positives = (valid_predictions * valid_labels).sum()
+            false_positives = (valid_predictions * (1 - valid_labels)).sum()
+            false_negatives = ((1 - valid_predictions) * valid_labels).sum()
+            true_negatives = ((1 - valid_predictions) * (1 - valid_labels)).sum()
+            
+            # Accuracy
+            correct = (valid_predictions == valid_labels).float() * loss_mask
+            accuracy = correct.sum() / loss_mask.sum().clamp_min(1e-6)
+            
+            # Precision: TP / (TP + FP)
+            precision = true_positives / (true_positives + false_positives).clamp_min(1e-6)
+            
+            # Recall: TP / (TP + FN)
+            recall = true_positives / (true_positives + false_negatives).clamp_min(1e-6)
+            
+            # F1: 2 * (precision * recall) / (precision + recall)
+            f1 = 2 * (precision * recall) / (precision + recall).clamp_min(1e-6)
+        
+        return {
+            'loss': classification_loss,
+            'accuracy': accuracy,
+            'precision': precision,
+            'recall': recall,
+            'f1': f1
+        }
+
+
+    def _compute_loss_and_metrics(self, y_hat_regression, y_hat_classification, y, item_index, current_hours, time_left, time_offset):
+        """Compute loss and metrics for both training and validation.
+        
+        Args:
+            y_hat_regression: Quantile predictions (B, S, Q)
+            y_hat_classification: Classification logits (B, S, 1)
+            
+        Returns:
+            Dictionary with keys: total_loss, pinball_loss, classification_loss, general_mae, 
+            recent_listings_mae, new_listings_mae, accuracy, precision, recall, f1, mask
+        """
         item_mask = (item_index != 0).float().unsqueeze(-1) # (B,S,1)
         
         # Only compute loss for current auctions (time_offset == 0)
@@ -186,10 +267,10 @@ class AuctionTransformer(L.LightningModule):
 
         # ----- Pinball loss over all quantiles -----
         quantile_targets = torch.as_tensor(
-            self.quantiles, device=y_hat.device, dtype=y_hat.dtype
+            self.quantiles, device=y_hat_regression.device, dtype=y_hat_regression.dtype
         ).view(1, 1, -1)  # (1,1,Q)
 
-        prediction_errors = y.unsqueeze(-1) - y_hat  # (B, S, Q)
+        prediction_errors = y.unsqueeze(-1) - y_hat_regression  # (B, S, Q)
         quantile_losses = torch.maximum(
             quantile_targets * prediction_errors,
             (quantile_targets - 1.0) * prediction_errors
@@ -197,9 +278,17 @@ class AuctionTransformer(L.LightningModule):
 
         pinball_loss = (quantile_losses * loss_mask).sum() / (loss_mask).sum().clamp_min(1e-6)
 
+        # ----- Classification loss and metrics -----
+        cls_metrics = self._compute_classification_loss_and_metrics(
+            y_hat_classification, y, loss_mask
+        )
+        
+        # ----- Combine losses -----
+        total_loss = pinball_loss + self.classification_loss_weight * cls_metrics['loss']
+
         # ----- Metrics computed on the median (tau=0.5) channel -----
         median_index = self.quantiles.index(0.5)
-        median_predictions = y_hat[..., median_index]  # (B, S)
+        median_predictions = y_hat_regression[..., median_index]  # (B, S)
 
         with torch.no_grad():
             # General MAE (in hours) - only for current auctions
@@ -228,7 +317,19 @@ class AuctionTransformer(L.LightningModule):
                 reduction='sum'
             ) / new_items_sum
 
-        return pinball_loss, general_mae, recent_listings_mae, new_listings_mae, loss_mask
+        return {
+            'total_loss': total_loss,
+            'pinball_loss': pinball_loss,
+            'classification_loss': cls_metrics['loss'],
+            'general_mae': general_mae,
+            'recent_listings_mae': recent_listings_mae,
+            'new_listings_mae': new_listings_mae,
+            'accuracy': cls_metrics['accuracy'],
+            'precision': cls_metrics['precision'],
+            'recall': cls_metrics['recall'],
+            'f1': cls_metrics['f1'],
+            'mask': loss_mask
+        }
         
     def _compute_gradient_norm(self):
         """Compute the total gradient norm across all parameters."""
@@ -314,7 +415,7 @@ class AuctionTransformer(L.LightningModule):
         self.log(f'{prefix}/new_listings_mae', new_listings_mae, on_step=True, on_epoch=True, prog_bar=True, batch_size=1)
 
     def training_step(self, batch, batch_idx):
-        y_hat = self((
+        y_hat_regression, y_hat_classification = self((
             batch['auctions'], 
             batch['item_index'], 
             batch['contexts'], 
@@ -325,28 +426,34 @@ class AuctionTransformer(L.LightningModule):
             batch['time_offset'],
         ))
         
-        loss, general_mae, recent_listings_mae, new_listings_mae, mask = self._compute_loss_and_metrics(
-            y_hat, batch['target'], batch['item_index'], batch['current_hours_raw'], batch['time_left_raw'], batch['time_offset']
+        metrics = self._compute_loss_and_metrics(
+            y_hat_regression, y_hat_classification, batch['target'], batch['item_index'], batch['current_hours_raw'], batch['time_left_raw'], batch['time_offset']
         )
 
-        self._log_metrics('train', loss, general_mae, recent_listings_mae, new_listings_mae)
+        self._log_metrics('train', metrics['total_loss'], metrics['general_mae'], metrics['recent_listings_mae'], metrics['new_listings_mae'])
+        self.log('train/pinball_loss', metrics['pinball_loss'], on_step=True, on_epoch=True, prog_bar=False, batch_size=1)
+        self.log('train/classification_loss', metrics['classification_loss'], on_step=True, on_epoch=True, prog_bar=False, batch_size=1)
+        self.log('train/classification_accuracy', metrics['accuracy'], on_step=True, on_epoch=True, prog_bar=True, batch_size=1)
+        self.log('train/classification_precision', metrics['precision'], on_step=True, on_epoch=True, prog_bar=False, batch_size=1)
+        self.log('train/classification_recall', metrics['recall'], on_step=True, on_epoch=True, prog_bar=False, batch_size=1)
+        self.log('train/classification_f1', metrics['f1'], on_step=True, on_epoch=True, prog_bar=False, batch_size=1)
         self.log('train/lr', self.optimizers().param_groups[0]['lr'], on_step=True, on_epoch=True)
         
         if self.global_step % self.logging_interval == 0:
             grad_norm = self._compute_gradient_norm()
             self.log('train/grad_norm', grad_norm, on_step=True, on_epoch=True, prog_bar=True)
-            self._log_quantile_metrics(prefix='train', y_hat=y_hat, y=batch['target'], item_mask=mask)
+            self._log_quantile_metrics(prefix='train', y_hat=y_hat_regression, y=batch['target'], item_mask=metrics['mask'])
             
             if self.log_step_predictions:
-                self._log_step_predictions(batch_idx, batch['target'], y_hat, mask, 'train')
+                self._log_step_predictions(batch_idx, batch['target'], y_hat_regression, y_hat_classification, metrics['mask'], 'train')
 
         if self.global_step == 0 and self.log_raw_batch_data:
-            self._log_raw_batch_data(batch_idx, batch, y_hat, mask, 'train')
+            self._log_raw_batch_data(batch_idx, batch, y_hat_regression, y_hat_classification, metrics['mask'], 'train')
         
-        return loss
+        return metrics['total_loss']
 
     def validation_step(self, batch, batch_idx):
-        y_hat = self((
+        y_hat_regression, y_hat_classification = self((
             batch['auctions'], 
             batch['item_index'], 
             batch['contexts'], 
@@ -357,28 +464,35 @@ class AuctionTransformer(L.LightningModule):
             batch['time_offset'],
         ))
         
-        loss, general_mae, recent_listings_mae, new_listings_mae, mask = self._compute_loss_and_metrics(
-            y_hat, batch['target'], batch['item_index'], batch['current_hours_raw'], batch['time_left_raw'], batch['time_offset']
+        metrics = self._compute_loss_and_metrics(
+            y_hat_regression, y_hat_classification, batch['target'], batch['item_index'], batch['current_hours_raw'], batch['time_left_raw'], batch['time_offset']
         )
 
-        self._log_metrics('val', loss, general_mae, recent_listings_mae, new_listings_mae)
-        self._log_quantile_metrics(prefix='val', y_hat=y_hat, y=batch['target'], item_mask=mask)
+        self._log_metrics('val', metrics['total_loss'], metrics['general_mae'], metrics['recent_listings_mae'], metrics['new_listings_mae'])
+        self.log('val/pinball_loss', metrics['pinball_loss'], on_step=False, on_epoch=True, prog_bar=False, batch_size=1)
+        self.log('val/classification_loss', metrics['classification_loss'], on_step=False, on_epoch=True, prog_bar=False, batch_size=1)
+        self.log('val/classification_accuracy', metrics['accuracy'], on_step=False, on_epoch=True, prog_bar=True, batch_size=1)
+        self.log('val/classification_precision', metrics['precision'], on_step=False, on_epoch=True, prog_bar=False, batch_size=1)
+        self.log('val/classification_recall', metrics['recall'], on_step=False, on_epoch=True, prog_bar=False, batch_size=1)
+        self.log('val/classification_f1', metrics['f1'], on_step=False, on_epoch=True, prog_bar=False, batch_size=1)
+        self._log_quantile_metrics(prefix='val', y_hat=y_hat_regression, y=batch['target'], item_mask=metrics['mask'])
 
         if self.log_step_predictions:
-            self._log_step_predictions(batch_idx, batch['target'], y_hat, mask, 'val')
+            self._log_step_predictions(batch_idx, batch['target'], y_hat_regression, y_hat_classification, metrics['mask'], 'val')
 
         if self.global_step == 0 and self.log_raw_batch_data:
-            self._log_raw_batch_data(batch_idx, batch, y_hat, mask, 'val')
+            self._log_raw_batch_data(batch_idx, batch, y_hat_regression, y_hat_classification, metrics['mask'], 'val')
 
-        return loss
+        return metrics['total_loss']
 
-    def _log_step_predictions(self, batch_idx, y, y_hat, mask, step_type):
+    def _log_step_predictions(self, batch_idx, y, y_hat_regression, y_hat_classification, mask, step_type):
         """Log predictions for the current step to CSV files.
         
         Args:
             batch_idx: The index of the current batch
             y: Ground truth values
-            y_hat: Model predictions (B, S, Q) where Q is number of quantiles
+            y_hat_regression: Quantile predictions (B, S, Q) where Q is number of quantiles
+            y_hat_classification: Classification logits (B, S, 1)
             mask: Validity mask for the predictions
             step_type: Either 'train' or 'val'
         """
@@ -388,9 +502,11 @@ class AuctionTransformer(L.LightningModule):
         for batch_item in range(len(y)):
             targets = y[batch_item].detach().cpu()
             # Extract all quantile predictions
-            q10_predictions = y_hat[batch_item, :, 0].detach().cpu()  # 0.1 quantile
-            q50_predictions = y_hat[batch_item, :, 1].detach().cpu()  # 0.5 quantile (median)
-            q90_predictions = y_hat[batch_item, :, 2].detach().cpu()  # 0.9 quantile
+            q10_predictions = y_hat_regression[batch_item, :, 0].detach().cpu()  # 0.1 quantile
+            q50_predictions = y_hat_regression[batch_item, :, 1].detach().cpu()  # 0.5 quantile (median)
+            q90_predictions = y_hat_regression[batch_item, :, 2].detach().cpu()  # 0.9 quantile
+            # Extract classification predictions (apply sigmoid to get probabilities)
+            classification_probs = torch.sigmoid(y_hat_classification[batch_item, :, 0]).detach().cpu()
             validity_mask = mask[batch_item, :, 0].detach().cpu()
             
             data = {
@@ -399,6 +515,7 @@ class AuctionTransformer(L.LightningModule):
                 'Prediction_Q10': [float(p) for p in q10_predictions],
                 'Prediction_Q50': [float(p) for p in q50_predictions],
                 'Prediction_Q90': [float(p) for p in q90_predictions],
+                'Classification_Prob': [float(p) for p in classification_probs],
                 'Status': ['Valid' if validity_mask[i] else 'Padding' for i in range(len(targets))]
             }
             df = pd.DataFrame(data)
@@ -406,13 +523,14 @@ class AuctionTransformer(L.LightningModule):
             output_file = step_dir / f"batch_{batch_idx}_item_{batch_item}.csv"
             df.to_csv(output_file, index=False)
 
-    def _log_raw_batch_data(self, batch_idx, batch, y_hat, mask, step_type):
+    def _log_raw_batch_data(self, batch_idx, batch, y_hat_regression, y_hat_classification, mask, step_type):
         """Log raw batch data to CSV files.
         
         Args:
             batch_idx: The index of the current batch
             batch: Input batch containing all features
-            y_hat: Model predictions
+            y_hat_regression: Quantile predictions
+            y_hat_classification: Classification logits
             mask: Validity mask
             step_type: Either 'train' or 'val'
         """
@@ -428,9 +546,11 @@ class AuctionTransformer(L.LightningModule):
             sequence_features = auctions[batch_item].detach().cpu().float()
             sequence_target = targets[batch_item].detach().cpu().float()
             # Extract all quantile predictions
-            q10_predictions = y_hat[batch_item, :, 0].detach().cpu().float()  # 0.1 quantile
-            q50_predictions = y_hat[batch_item, :, 1].detach().cpu().float()  # 0.5 quantile (median)
-            q90_predictions = y_hat[batch_item, :, 2].detach().cpu().float()  # 0.9 quantile
+            q10_predictions = y_hat_regression[batch_item, :, 0].detach().cpu().float()  # 0.1 quantile
+            q50_predictions = y_hat_regression[batch_item, :, 1].detach().cpu().float()  # 0.5 quantile (median)
+            q90_predictions = y_hat_regression[batch_item, :, 2].detach().cpu().float()  # 0.9 quantile
+            # Extract classification predictions (apply sigmoid to get probabilities)
+            classification_probs = torch.sigmoid(y_hat_classification[batch_item, :, 0]).detach().cpu().float()
             
             df_sequence = pd.DataFrame(
                 sequence_features,
@@ -441,6 +561,7 @@ class AuctionTransformer(L.LightningModule):
             df_sequence['prediction_q10'] = q10_predictions
             df_sequence['prediction_q50'] = q50_predictions
             df_sequence['prediction_q90'] = q90_predictions
+            df_sequence['classification_prob'] = classification_probs
             df_sequence['is_valid'] = [validity_mask[batch_item, i, 0] for i in range(seq_length)]
             
             # Add additional features if available

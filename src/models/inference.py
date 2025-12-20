@@ -19,14 +19,12 @@ def predict_dataframe(model, df_auctions, prediction_time, feature_stats, max_ho
     df_out["prediction_q50"] = np.nan
     df_out["prediction_q90"] = np.nan
 
-    skipped = set()
-
     for auction_id, df_item in grouped.items():
-        df_item = df_item.sort_values("time_offset")
-
-        if len(df_item) > max_sequence_length:
-            print(f"Sequence too long: {len(df_item)}")
-            continue
+        # Keep the most recent entries (time_offset closer to 0) and maintain
+        # the same old->new ordering used during training.
+        df_item = df_item.sort_values("time_offset", ascending=False)
+        if max_sequence_length is not None and len(df_item) > max_sequence_length:
+            df_item = df_item.tail(max_sequence_length)
 
         features_np = np.stack([
             np.log1p(df_item["bid"].to_numpy(dtype=np.float32)),
@@ -91,9 +89,6 @@ def predict_dataframe(model, df_auctions, prediction_time, feature_stats, max_ho
             df_out.loc[idx_now, "prediction_q90"] = q[mask_now, 2]
 
             current_hours_now = df_item.loc[mask_now, "current_hours"].to_numpy(dtype=np.float32)
-
-    if skipped:
-        df_out = df_out[~df_out["id"].isin(skipped)]
 
     for col in ["buyout","bid","time_left","current_hours","prediction_q10","prediction_q50","prediction_q90"]:
         if col in df_out.columns:
