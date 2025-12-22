@@ -18,6 +18,7 @@ def predict_dataframe(model, df_auctions, prediction_time, feature_stats, max_ho
     df_out["prediction_q10"] = np.nan
     df_out["prediction_q50"] = np.nan
     df_out["prediction_q90"] = np.nan
+    df_out["is_short_duration"] = np.nan
 
     for auction_id, df_item in grouped.items():
         # Keep the most recent entries (time_offset closer to 0) and maintain
@@ -78,19 +79,22 @@ def predict_dataframe(model, df_auctions, prediction_time, feature_stats, max_ho
             time_offset.unsqueeze(0),
         )
 
-        y_pred_quantiles = model(X)[0]
+        y_pred_quantiles, y_pred_classification = model(X)
 
         mask_now = (df_item["time_offset"].to_numpy() == 0)
         if mask_now.any():
             q = y_pred_quantiles.detach().cpu().numpy()
+            # Apply sigmoid to classification logits to get probability of short duration
+            c = torch.sigmoid(y_pred_classification).detach().cpu().numpy()
             idx_now = df_item.index[mask_now]
-            df_out.loc[idx_now, "prediction_q10"] = q[mask_now, 0]
-            df_out.loc[idx_now, "prediction_q50"] = q[mask_now, 1]
-            df_out.loc[idx_now, "prediction_q90"] = q[mask_now, 2]
+            df_out.loc[idx_now, "prediction_q10"] = q[0, mask_now, 0]
+            df_out.loc[idx_now, "prediction_q50"] = q[0, mask_now, 1]
+            df_out.loc[idx_now, "prediction_q90"] = q[0, mask_now, 2]
+            df_out.loc[idx_now, "is_short_duration"] = c[0, mask_now, 0]
 
             current_hours_now = df_item.loc[mask_now, "current_hours"].to_numpy(dtype=np.float32)
 
-    for col in ["buyout","bid","time_left","current_hours","prediction_q10","prediction_q50","prediction_q90"]:
+    for col in ["buyout","bid","time_left","current_hours","prediction_q10","prediction_q50","prediction_q90","is_short_duration"]:
         if col in df_out.columns:
             df_out[col] = np.round(df_out[col].astype(float), 2)
 

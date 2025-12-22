@@ -182,6 +182,7 @@ def generate_recommendations(expected_profit, median_discount=0.75):
             "prediction_q10": float(pred_row["prediction_q10"]),
             "prediction_q50": float(pred_row["prediction_q50"]),
             "prediction_q90": float(pred_row["prediction_q90"]),
+            "is_short_duration": float(pred_row["is_short_duration"]),
             "potential_profit": round(potential_profit, 2),
         })
         recommendations_list.append(recommendation)
@@ -273,9 +274,9 @@ def create_ui():
                 prediction_results = prediction_results[prediction_results['time_offset'] == 0]
 
                 if prediction_results.empty:
-                    return pd.DataFrame(columns=['item_id', 'buyout', 'quantity', 'time_left', 'context', 'bonus_lists', 'modifier_types', 'modifier_values', 'current_hours', 'prediction_q10', 'prediction_q50', 'prediction_q90'])
+                    return pd.DataFrame(columns=['item_id', 'buyout', 'quantity', 'time_left', 'context', 'bonus_lists', 'modifier_types', 'modifier_values', 'current_hours', 'prediction_q10', 'prediction_q50', 'prediction_q90', 'is_short_duration'])
 
-                display_columns_prediction = display_columns + ['prediction_q10', 'prediction_q50', 'prediction_q90']
+                display_columns_prediction = display_columns + ['prediction_q10', 'prediction_q50', 'prediction_q90', 'is_short_duration']
                 return prediction_results[display_columns_prediction].head(100)
 
             def store_item_csv(item_id, _time_offset_value):
@@ -332,6 +333,7 @@ def create_ui():
             gr.Markdown("- **prediction_q10**: 10th percentile prediction (pessimistic - 90% chance it takes longer)")
             gr.Markdown("- **prediction_q50**: 50th percentile prediction (median)")
             gr.Markdown("- **prediction_q90**: 90th percentile prediction (optimistic - 90% chance it sells faster)")
+            gr.Markdown("- **is_short_duration**: Probability (0-1) that the item will sell in less than 8 hours")
             gr.Markdown(f"Items are considered likely to sell if prediction_q50 < {sold_threshold} hours")
             
             with gr.Row():
@@ -354,6 +356,7 @@ def create_ui():
             gr.Markdown("- **predicted_hours_q10**: 10th percentile (optimistic timing)")
             gr.Markdown("- **predicted_hours_q50**: 50th percentile (median hours to sale)")
             gr.Markdown("- **predicted_hours_q90**: 90th percentile (pessimistic timing)")
+            gr.Markdown("- **is_short_duration**: Probability (0-1) that the item will sell in less than 8 hours")
             
             with gr.Row():
                 flip_item_search = gr.Textbox(label="Search by Item ID", placeholder="Enter item ID...")
@@ -460,7 +463,8 @@ def create_ui():
                     'potential_profit': round(float(target_price) - float(lowest_auction['buyout']), 2),
                     'predicted_hours_q10': flip_prediction['prediction_q10'],
                     'predicted_hours_q50': flip_prediction['prediction_q50'],
-                    'predicted_hours_q90': flip_prediction['prediction_q90']
+                    'predicted_hours_q90': flip_prediction['prediction_q90'],
+                    'is_short_duration': flip_prediction['is_short_duration']
                 }])
                 
                 return result            
