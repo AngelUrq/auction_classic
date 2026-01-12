@@ -171,6 +171,7 @@ def load_auctions_from_sample(
 
     # ---- PASS 2: build rows while reading one file at a time ----
     rows = []
+    skipped_items_count = 0
     for filepath, snapshot_time in tqdm(list(file_info.items()), desc="Pass 2/2: rows"):
         try:
             with open(filepath, 'r') as f:
@@ -186,7 +187,10 @@ def load_auctions_from_sample(
                 continue
 
             item_id = auction['item']['id']
-            item_index = item_to_idx.get(str(item_id), 1)
+            if str(item_id) not in item_to_idx:
+                skipped_items_count += 1
+                continue
+            item_index = item_to_idx[str(item_id)]
 
             bid = auction.get('bid', 0) / 10000.0
             buyout = auction.get('buyout', 0) / 10000.0
@@ -253,5 +257,7 @@ def load_auctions_from_sample(
         f'Built dataframe with {len(df_auctions)} rows from {len(file_info)} snapshots '
         f'[{window_start:%Y-%m-%d %H}:00, {window_end:%Y-%m-%d %H}:00], include_targets={include_targets}'
     )
+    if skipped_items_count > 0:
+        print(f"Skipped {skipped_items_count} items because they were not in the dictionary.")
 
     return df_auctions

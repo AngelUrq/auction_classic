@@ -24,7 +24,7 @@ ROW_CHUNK = 1024
 # We exclude the first times of these days because their data is not complete.
 # current_hours is not available for these days as you need to wait 48 hours to get it.
 # We also exclude the last days because if you publish an auction in the last day, you can't get the hours_on_sale.
-exclude_first_times = ['01-06-2025', '02-06-2025', '30-07-2025', '31-07-2025']
+exclude_first_times = ['20-12-2025', '21-12-2025','22-12-2025', '10-01-2026', '11-01-2026', '12-01-2026']
 last_exclude_date = datetime.strptime(exclude_first_times[-1], '%d-%m-%Y')
 
 

@@ -24,9 +24,10 @@ model = None
 feature_stats = None
 prediction_time = None
 recommendations = None
-ckpt_path = 'models/transformer-4M-quantile-how-historical_24/last-v1.ckpt'
-max_hours_back = 24
-sold_threshold = 4
+ckpt_path = 'models/transformer-4.2M-quantile-historical_72-lr1e-04-bs64/last-v3.ckpt'
+max_hours_back = 72
+max_sequence_length = 4096
+sold_threshold = 8
 
 
 def load_data_and_model():
@@ -56,10 +57,7 @@ def load_data_and_model():
 
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     
-    swiss_tz = ZoneInfo("Europe/Zurich")
-    prediction_time = datetime.now(swiss_tz)
-    prediction_time = prediction_time.replace(tzinfo=None)
-
+    prediction_time = datetime.now()
     print(f'Prediction time: {prediction_time}')
 
     mappings_dir = os.path.join(base_path, 'generated/mappings')
@@ -126,9 +124,9 @@ def generate_recommendations(expected_profit, median_discount=0.75):
         cheapest_buyout = float(cheapest_row["buyout"])
         auction_id = cheapest_row["id"]
 
-        # Present-only median target price
-        present_median = float(df_now_item["buyout"].median())
-        target_price = present_median * float(median_discount)
+        # Present-only q25 target price
+        present_q25 = float(df_now_item["buyout"].quantile(0.25))
+        target_price = present_q25 * 0.7
         potential_profit = target_price - cheapest_buyout
         if potential_profit < expected_profit:
             continue
@@ -160,7 +158,8 @@ def generate_recommendations(expected_profit, median_discount=0.75):
             df_auctions=df_item_full,
             prediction_time=prediction_time,
             feature_stats=feature_stats,
-            max_hours_back=max_hours_back
+            max_hours_back=max_hours_back,
+            max_sequence_length=max_sequence_length
         )
         if prediction_df.empty:
             continue
@@ -268,7 +267,8 @@ def create_ui():
                     filtered_df, 
                     prediction_time, 
                     feature_stats,
-                    max_hours_back=max_hours_back
+                    max_hours_back=max_hours_back,
+                    max_sequence_length=max_sequence_length
                 )
                 
                 prediction_results = prediction_results[prediction_results['time_offset'] == 0]
@@ -327,7 +327,7 @@ def create_ui():
         
         with gr.Tab("Recommendations"):
             gr.Markdown("## Auction Recommendations")
-            gr.Markdown("This tab recommends items to flip using their **median price** as the suggested selling price.")
+            gr.Markdown("This tab recommends items to flip using their **25th percentile (q25) price * 0.7** as the suggested selling price.")
             gr.Markdown("Only items with potential profit >= your minimum expected profit filter will be shown.")
             gr.Markdown("**Prediction columns explained:**")
             gr.Markdown("- **prediction_q10**: 10th percentile prediction (pessimistic - 90% chance it takes longer)")
@@ -437,7 +437,8 @@ def create_ui():
                     df_item_full, 
                     prediction_time, 
                     feature_stats,
-                    max_hours_back=max_hours_back
+                    max_hours_back=max_hours_back,
+                    max_sequence_length=max_sequence_length
                 )
 
                 if prediction_df.empty:

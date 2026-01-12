@@ -2,6 +2,30 @@ import os, json, argparse
 from datetime import datetime
 from tqdm import tqdm
 
+
+def update_mapping(output_dir, filename, new_items, default_map=None):
+    if default_map is None:
+        default_map = {"0": 0, "1": 1}
+        
+    filepath = os.path.join(output_dir, filename)
+    
+    if os.path.exists(filepath):
+        with open(filepath, 'r') as f:
+            mapping = json.load(f)
+    else:
+        mapping = default_map.copy()
+        
+    current_idx = max(mapping.values()) + 1
+    existing_keys = set(mapping.keys())
+    
+    for item in sorted(new_items):
+        item_str = str(item)
+        if item_str not in existing_keys:
+            mapping[item_str] = current_idx
+            current_idx += 1
+            
+    return mapping
+
 def process_mappings(args):
     print('Processing auctions...')
     file_info = {}
@@ -47,23 +71,10 @@ def process_mappings(args):
             if 'modifiers' in item:
                 modifier_types.update(mod['type'] for mod in item['modifiers'])
 
-    # Padding: 0, Unknown: 1
-    item_to_index = {"0": 0, "1": 1}
-    context_to_index = {"0": 0, "1": 1}
-    bonus_id_to_index = {"0": 0, "1": 1} 
-    modifier_type_to_index = {"0": 0, "1": 1}
-
-    for idx, item_id in enumerate(sorted(item_ids), start=2):
-        item_to_index[str(item_id)] = idx
-
-    for idx, context in enumerate(sorted(contexts), start=2):
-        context_to_index[str(context)] = idx
-        
-    for idx, bonus_id in enumerate(sorted(bonus_ids), start=2):
-        bonus_id_to_index[str(bonus_id)] = idx
-        
-    for idx, mod_type in enumerate(sorted(modifier_types), start=2):
-        modifier_type_to_index[str(mod_type)] = idx
+    item_to_index = update_mapping(args.output_dir, 'item_to_idx.json', item_ids)
+    context_to_index = update_mapping(args.output_dir, 'context_to_idx.json', contexts)
+    bonus_id_to_index = update_mapping(args.output_dir, 'bonus_to_idx.json', bonus_ids)
+    modifier_type_to_index = update_mapping(args.output_dir, 'modtype_to_idx.json', modifier_types)
 
     os.makedirs(args.output_dir, exist_ok=True)
 
