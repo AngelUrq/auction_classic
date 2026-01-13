@@ -1,14 +1,12 @@
 # Auction Transformer Training Configuration
-resume: null
-
 data:
   dir: generated
-  date_start: "2025-07-01"
-  date_end: "2025-09-01"
+  date_start: "2025-12-20"
+  date_end: "2026-01-10"
   train_split: 0.95
   train_fraction: 0.90
-  max_hours_back: 24
-  max_sequence_length: 1024
+  max_hours_back: 72
+  max_sequence_length: 4096
   bucket_sampling: true  # Group similar-length sequences to reduce padding waste
   num_buckets: 20        # Number of length buckets (only used if bucket_sampling=true)
   prefetch_factor: 8
@@ -16,10 +14,10 @@ data:
 training:
   num_epochs: 1
   batch_size: 64
-  learning_rate: 1e-4
+  learning_rate: 1e-3
   use_lr_scheduler: true
   gradient_clip: 3.0
-  precision: bf16-mixed
+  precision: bf16
   val_check_interval: 0.1
   limit_val_batches: 5000
   checkpoint_every: 10000
@@ -28,6 +26,8 @@ training:
   num_workers: 8
 
 model:
+  pretrained_path: /home/angel/source/auction_classic/models/transformer-4.2M-quantile-historical_72-lr1e-04-bs64/epoch_epoch=00-v3.ckpt
+  reset_embeddings: true
   input_size: 5
   embedding_dim: 32
   d_model: 64

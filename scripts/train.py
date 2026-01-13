@@ -8,6 +8,7 @@ from pathlib import Path
 import lightning as L
 import pandas as pd
 import torch
+import torch.nn as nn
 import yaml
 from lightning.pytorch.callbacks import ModelCheckpoint
 from lightning.pytorch.loggers import WandbLogger
@@ -267,13 +268,12 @@ def parse_args() -> argparse.Namespace:
         default=str(repo_root / "configs" / "transformer.yaml"),
         help="Path to config YAML file",
     )
-    parser.add_argument(
-        "--resume",
-        type=str,
-        default=None,
-        help="Path to checkpoint to resume from",
-    )
+
     return parser.parse_args()
+
+
+
+
 
 
 def main():
@@ -291,11 +291,49 @@ def main():
     mappings = load_mappings(data_dir)
 
     logger.info("Creating model...")
-    if cfg.resume:
-        logger.info(f"Resuming from checkpoint: {cfg.resume}")
-        model = AuctionTransformer.load_from_checkpoint(cfg.resume)
+    logger.info("Creating model...")
+    
+    if cfg.model.pretrained_path:
+        logger.info(f"Loading pretrained weights from {cfg.model.pretrained_path}")
+        # Load model using checkpoint hyperparameters
+        model = AuctionTransformer.load_from_checkpoint(cfg.model.pretrained_path)
         param_count = sum(p.numel() for p in model.parameters())
+
+        # Handle embedding resets / resizing
+        if cfg.model.get("reset_embeddings", False):
+            logger.info("Resetting/Resizing embedding layers based on current mappings")
+            
+            # Re-initialize embeddings with new sizes from mappings
+            # Note: We use model.hparams.embedding_dim to match the loaded model's dim
+            
+            n_items = len(mappings["item"])
+            logger.info(f"  Resizing item_embeddings to {n_items}")
+            model.item_embeddings = nn.Embedding(n_items, model.hparams.embedding_dim)
+
+            n_contexts = len(mappings["context"]) + 1
+            logger.info(f"  Resizing context_embeddings to {n_contexts}")
+            model.context_embeddings = nn.Embedding(n_contexts, model.hparams.embedding_dim)
+
+            n_bonuses = len(mappings["bonus"])
+            logger.info(f"  Resizing bonus_embeddings to {n_bonuses}")
+            model.bonus_embeddings = nn.Embedding(n_bonuses, model.hparams.embedding_dim)
+            
+            n_modtypes = len(mappings["modtype"])
+            logger.info(f"  Resizing modifier_embeddings to {n_modtypes}")
+            model.modifier_embeddings = nn.Embedding(n_modtypes, model.hparams.embedding_dim)
+
+            # Also reset time_offset_embeddings if max_hours_back changed
+            # Current max_hours_back from config
+            current_max_hours = cfg.data.max_hours_back
+            logger.info(f"  Resizing time_offset_embeddings to {current_max_hours + 1}")
+            model.time_offset_embeddings = nn.Embedding(current_max_hours + 1, model.hparams.embedding_dim)
+
+            # Recalculate param count after changes
+            param_count = sum(p.numel() for p in model.parameters())
+            logger.info(f"Param count after reset: {param_count:,}")
+            
     else:
+        # Always create a fresh model with current config to ensure correct shapes for new vocab
         model, param_count = create_model(mappings, cfg)
 
     run_name = generate_run_name(
@@ -372,7 +410,7 @@ def main():
         model,
         train_dataloader,
         val_dataloader,
-        ckpt_path=cfg.resume if cfg.resume else None,
+        ckpt_path=None,
     )
 
     logger.info("=" * 60)
