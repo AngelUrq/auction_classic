@@ -26,7 +26,7 @@ SELECT
     MONTH(MIN(ae.record)) AS first_appearance_month,
     DAY(MIN(ae.record)) AS first_appearance_day,
     HOUR(MIN(ae.record)) AS first_appearance_hour,
-    COUNT(*) AS hours_on_sale
+    COUNT(*) AS listing_duration
 FROM Auctions a
 JOIN ActionEvents ae ON a.auction_id = ae.auction_id
 JOIN Items i on i.item_id = a.item_id

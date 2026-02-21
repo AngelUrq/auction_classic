@@ -55,13 +55,13 @@ def _accumulate_batch(
     modifier_sum_sq: torch.Tensor | None,
 ) -> tuple[torch.Tensor, torch.Tensor, int, torch.Tensor, torch.Tensor, int]:
     """Accumulate sums and squared sums for auctions and modifiers."""
-    auctions = batch["auctions"]
+    auction_features = batch["auction_features"]
     modifier_values = batch["modifier_values"]
 
     valid_mask = batch["item_index"] != 0
 
-    auction_mask = valid_mask.unsqueeze(-1).expand_as(auctions)
-    valid_auctions = auctions[auction_mask].reshape(-1, auctions.size(-1))
+    auction_mask = valid_mask.unsqueeze(-1).expand_as(auction_features)
+    valid_auctions = auction_features[auction_mask].reshape(-1, auction_features.size(-1))
 
     if sum_features is None:
         sum_features = valid_auctions.sum(dim=0)
@@ -211,6 +211,10 @@ def main():
     memmap_dir = Path(args.memmap_dir)
     output_path = Path(args.output)
     output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    if output_path.exists():
+        logger.info("Skipping: %s already exists.", output_path)
+        return
 
     logger.info("Using indices: %s", indices_path)
     logger.info("Using memmap dir: %s", memmap_dir)

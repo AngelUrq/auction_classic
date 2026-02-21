@@ -58,7 +58,7 @@ class AuctionEnv(gym.Env):
                 'first_appearance_month': auction_record.month,
                 'first_appearance_day': auction_record.day,
                 'first_appearance_hour': auction_record.hour,
-                'hours_on_sale': 0,
+                'listing_duration': 0,
                 'unit_price': item['buyout'] / 10000.0 / item['quantity']
             })
 

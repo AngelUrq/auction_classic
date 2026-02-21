@@ -22,8 +22,8 @@ MAX_SEQUENCE_LENGTH = 1024
 ROW_CHUNK = 1024
 
 # We exclude the first times of these days because their data is not complete.
-# current_hours is not available for these days as you need to wait 48 hours to get it.
-# We also exclude the last days because if you publish an auction in the last day, you can't get the hours_on_sale.
+# listing_age is not available for these days as you need to wait 48 hours to get it.
+# We also exclude the last days because if you publish an auction in the last day, you can't get the listing_duration.
 exclude_first_times = ['20-12-2025', '21-12-2025','22-12-2025', '10-01-2026', '11-01-2026', '12-01-2026']
 last_exclude_date = datetime.strptime(exclude_first_times[-1], '%d-%m-%Y')
 
@@ -56,8 +56,8 @@ def _check_item_datasets(h5_file, item_id_str):
         grp.create_dataset('data', shape=(0, 6), maxshape=(None, 6), dtype='float32', chunks=(ROW_CHUNK, 6))
     if 'contexts' not in grp:
         grp.create_dataset('contexts', shape=(0,), maxshape=(None,), dtype='int32', chunks=(ROW_CHUNK,))
-    if 'bonus_lists' not in grp:
-        grp.create_dataset('bonus_lists', shape=(0, MAX_BONUSES), maxshape=(None, MAX_BONUSES), dtype='int32', chunks=(ROW_CHUNK, MAX_BONUSES))
+    if 'bonus_ids' not in grp:
+        grp.create_dataset('bonus_ids', shape=(0, MAX_BONUSES), maxshape=(None, MAX_BONUSES), dtype='int32', chunks=(ROW_CHUNK, MAX_BONUSES))
     if 'modifier_types' not in grp:
         grp.create_dataset('modifier_types', shape=(0, MAX_MODIFIERS), maxshape=(None, MAX_MODIFIERS), dtype='int32', chunks=(ROW_CHUNK, MAX_MODIFIERS))
     if 'modifier_values' not in grp:
@@ -66,23 +66,23 @@ def _check_item_datasets(h5_file, item_id_str):
     return grp
 
 
-def _append_item_block(grp, data_h, contexts_h, bonus_lists_h, modifier_types_h, modifier_values_h):
+def _append_item_block(grp, data_h, contexts_h, bonus_ids_h, modifier_types_h, modifier_values_h):
     n = data_h.shape[0]
     old = grp['data'].shape[0]
     new = old + n
 
     grp['data'].resize((new, 6))
     grp['contexts'].resize((new,))
-    grp['bonus_lists'].resize((new, MAX_BONUSES))
+    grp['bonus_ids'].resize((new, MAX_BONUSES))
     grp['modifier_types'].resize((new, MAX_MODIFIERS))
     grp['modifier_values'].resize((new, MAX_MODIFIERS))
 
     grp['data'][old:new, :] = data_h
     grp['contexts'][old:new] = contexts_h
-    grp['bonus_lists'][old:new, :] = bonus_lists_h
+    grp['bonus_ids'][old:new, :] = bonus_ids_h
     grp['modifier_types'][old:new, :] = modifier_types_h
     grp['modifier_values'][old:new, :] = modifier_values_h
-    
+
     return old, n
 
 
@@ -137,7 +137,7 @@ def process_auctions(args):
         day_items = defaultdict(lambda: {
             'records': [], 'lengths': [], 'stats': [],
             'data_blocks': [], 'contexts_blocks': [],
-            'bonus_blocks': [], 'modifier_types_blocks': [], 'modifier_values_blocks': [],
+            'bonus_ids_blocks': [], 'modifier_types_blocks': [], 'modifier_values_blocks': [],
         })
 
         # Accumulate each hour in the day
@@ -171,27 +171,27 @@ def process_auctions(args):
 
                 first_appearance = datetime.strptime(timestamps[auction_id]['first_appearance'], '%Y-%m-%d %H:%M:%S')
                 last_appearance  = datetime.strptime(timestamps[auction_id]['last_appearance'],  '%Y-%m-%d %H:%M:%S')
-                current_hours = (prediction_time - first_appearance).total_seconds() / 3600.0
-                hours_on_sale = (last_appearance - prediction_time).total_seconds() / 3600.0
+                listing_age = (prediction_time - first_appearance).total_seconds() / 3600.0
+                listing_duration = (last_appearance - prediction_time).total_seconds() / 3600.0
 
-                row_data = np.array([bid, buyout, quantity, time_left, current_hours, hours_on_sale], dtype=np.float32)
+                row_data = np.array([bid, buyout, quantity, time_left, listing_age, listing_duration], dtype=np.float32)
 
                 if item_index not in auctions_by_item:
                     auctions_by_item[item_index] = {
                         'data': [], 'contexts': [],
-                        'bonus_lists': [], 'modifier_types': [], 'modifier_values': []
+                        'bonus_ids': [], 'modifier_types': [], 'modifier_values': []
                     }
 
                 auctions_by_item[item_index]['data'].append(row_data)
                 auctions_by_item[item_index]['contexts'].append(context)
-                auctions_by_item[item_index]['bonus_lists'].append(bonus_arr)
+                auctions_by_item[item_index]['bonus_ids'].append(bonus_arr)
                 auctions_by_item[item_index]['modifier_types'].append(modifier_types)
                 auctions_by_item[item_index]['modifier_values'].append(modifier_values)
 
             for item_index, pack in auctions_by_item.items():
                 data_h = np.vstack(pack['data']).astype(np.float32, copy=False)
                 contexts_h = np.asarray(pack['contexts'], dtype=np.int32)
-                bonus_lists_h = np.vstack(pack['bonus_lists']).astype(np.int32, copy=False)
+                bonus_ids_h = np.vstack(pack['bonus_ids']).astype(np.int32, copy=False)
                 modifier_types_h = np.vstack(pack['modifier_types']).astype(np.int32, copy=False)
                 modifier_values_h = np.vstack(pack['modifier_values']).astype(np.float32, copy=False)
 
@@ -199,18 +199,18 @@ def process_auctions(args):
                     print(f'Capping {data_h.shape[0]} from item {item_index} to {MAX_SEQUENCE_LENGTH}')
                     data_h = data_h[:MAX_SEQUENCE_LENGTH]
                     contexts_h = contexts_h[:MAX_SEQUENCE_LENGTH]
-                    bonus_lists_h = bonus_lists_h[:MAX_SEQUENCE_LENGTH]
+                    bonus_ids_h = bonus_ids_h[:MAX_SEQUENCE_LENGTH]
                     modifier_types_h = modifier_types_h[:MAX_SEQUENCE_LENGTH]
                     modifier_values_h = modifier_values_h[:MAX_SEQUENCE_LENGTH]
 
-                item_hours_on_sale = data_h[:, 5]
-                item_current_hours = data_h[:, 4]
+                item_listing_duration = data_h[:, 5]
+                item_listing_age = data_h[:, 4]
                 stats_tuple = (
-                    int(len(item_hours_on_sale)),
-                    float(np.mean(item_hours_on_sale)), float(np.std(item_hours_on_sale)),
-                    float(np.min(item_hours_on_sale)), float(np.max(item_hours_on_sale)),
-                    float(np.mean(item_current_hours)), float(np.std(item_current_hours)),
-                    float(np.min(item_current_hours)), float(np.max(item_current_hours)),
+                    int(len(item_listing_duration)),
+                    float(np.mean(item_listing_duration)), float(np.std(item_listing_duration)),
+                    float(np.min(item_listing_duration)), float(np.max(item_listing_duration)),
+                    float(np.mean(item_listing_age)), float(np.std(item_listing_age)),
+                    float(np.min(item_listing_age)), float(np.max(item_listing_age)),
                 )
 
                 buf = day_items[item_index]
@@ -218,7 +218,7 @@ def process_auctions(args):
                 buf['lengths'].append(int(data_h.shape[0]))
                 buf['data_blocks'].append(data_h)
                 buf['contexts_blocks'].append(contexts_h)
-                buf['bonus_blocks'].append(bonus_lists_h)
+                buf['bonus_ids_blocks'].append(bonus_ids_h)
                 buf['modifier_types_blocks'].append(modifier_types_h)
                 buf['modifier_values_blocks'].append(modifier_values_h)
                 buf['stats'].append(stats_tuple)
@@ -234,12 +234,12 @@ def process_auctions(args):
 
                 data_day = np.concatenate(buf['data_blocks'], axis=0)
                 contexts_day = np.concatenate(buf['contexts_blocks'], axis=0)
-                bonus_lists_day = np.concatenate(buf['bonus_blocks'], axis=0)
+                bonus_ids_day = np.concatenate(buf['bonus_ids_blocks'], axis=0)
                 modifier_types_day = np.concatenate(buf['modifier_types_blocks'], axis=0)
                 modifier_values_day = np.concatenate(buf['modifier_values_blocks'], axis=0)
 
                 base_start, _ = _append_item_block(
-                    grp, data_day, contexts_day, bonus_lists_day, modifier_types_day, modifier_values_day
+                    grp, data_day, contexts_day, bonus_ids_day, modifier_types_day, modifier_values_day
                 )
 
                 prefix = 0
@@ -256,10 +256,10 @@ def process_auctions(args):
         if indices_rows:
             cols = [
                 'record', 'item_index',
-                'g_hours_on_sale_len', 'g_hours_on_sale_mean', 'g_hours_on_sale_std',
-                'g_hours_on_sale_min', 'g_hours_on_sale_max',
-                'g_current_hours_mean', 'g_current_hours_std',
-                'g_current_hours_min', 'g_current_hours_max',
+                'g_listing_duration_len', 'g_listing_duration_mean', 'g_listing_duration_std',
+                'g_listing_duration_min', 'g_listing_duration_max',
+                'g_listing_age_mean', 'g_listing_age_std',
+                'g_listing_age_min', 'g_listing_age_max',
                 'start', 'length'
             ]
             pd.DataFrame(indices_rows, columns=cols).to_csv(
@@ -289,6 +289,12 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
     os.makedirs(args.output_dir, exist_ok=True)
+
+    h5_path = os.path.join(args.output_dir, 'sequences.h5')
+    parquet_path = os.path.join(args.output_dir, 'indices.parquet')
+    if os.path.exists(h5_path) and os.path.exists(parquet_path):
+        print(f"Skipping: {h5_path} and {parquet_path} already exist.")
+        exit(0)
 
     start_time = time.time()
     process_auctions(args)

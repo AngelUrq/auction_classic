@@ -41,36 +41,36 @@ def collate_auctions(batch, max_sequence_length=None, pad_value=0):
     """Collate function: optionally crop from the left, then pad to batch max length."""
     L = max_sequence_length
 
-    auctions       = _crop_and_pad([b['auctions']          for b in batch], L, pad_value)
-    item_index     = _crop_and_pad([b['item_index']        for b in batch], L, pad_value)
-    contexts       = _crop_and_pad([b['contexts']          for b in batch], L, pad_value)
-    bonus_lists    = _crop_and_pad([b['bonus_lists']       for b in batch], L, pad_value)
-    modifier_types = _crop_and_pad([b['modifier_types']    for b in batch], L, pad_value)
-    modifier_values= _crop_and_pad([b['modifier_values']   for b in batch], L, pad_value)
-    current_hours  = _crop_and_pad([b['current_hours_raw'] for b in batch], L, pad_value)
-    time_left      = _crop_and_pad([b['time_left_raw']     for b in batch], L, pad_value)
-    hour_of_week   = _crop_and_pad([b['hour_of_week']      for b in batch], L, pad_value)
-    time_offset    = _crop_and_pad([b['time_offset']       for b in batch], L, pad_value)
-    targets        = _crop_and_pad([b['target']            for b in batch], L, pad_value)
+    auction_features = _crop_and_pad([b['auction_features']   for b in batch], L, pad_value)
+    item_index       = _crop_and_pad([b['item_index']         for b in batch], L, pad_value)
+    contexts         = _crop_and_pad([b['contexts']           for b in batch], L, pad_value)
+    bonus_ids        = _crop_and_pad([b['bonus_ids']          for b in batch], L, pad_value)
+    modifier_types   = _crop_and_pad([b['modifier_types']     for b in batch], L, pad_value)
+    modifier_values  = _crop_and_pad([b['modifier_values']    for b in batch], L, pad_value)
+    listing_age      = _crop_and_pad([b['listing_age']        for b in batch], L, pad_value)
+    time_left        = _crop_and_pad([b['time_left']          for b in batch], L, pad_value)
+    hour_of_week     = _crop_and_pad([b['hour_of_week']       for b in batch], L, pad_value)
+    snapshot_offset  = _crop_and_pad([b['snapshot_offset']    for b in batch], L, pad_value)
+    listing_duration = _crop_and_pad([b['listing_duration']   for b in batch], L, pad_value)
 
     return {
-        'auctions': auctions,                # (B, T_max, 6)
-        'item_index': item_index,            # (B, T_max)
+        'auction_features': auction_features,    # (B, T_max, 5)
+        'item_index': item_index,                # (B, T_max)
         'contexts': contexts,
-        'bonus_lists': bonus_lists,
+        'bonus_ids': bonus_ids,
         'modifier_types': modifier_types,
         'modifier_values': modifier_values,
-        'current_hours_raw': current_hours,
-        'time_left_raw': time_left,
+        'listing_age': listing_age,
+        'time_left': time_left,
         'hour_of_week': hour_of_week,
-        'time_offset': time_offset,
-        'target': targets
+        'snapshot_offset': snapshot_offset,
+        'listing_duration': listing_duration,
     }
 
 
 def create_access_token(client_id, client_secret, region='us'):
     """Create an OAuth access token for the Blizzard API.
-    
+
     This matches the approach used in the shell script, which uses a direct POST request
     with client credentials authentication.
     """
@@ -80,45 +80,45 @@ def create_access_token(client_id, client_secret, region='us'):
         data=data,
         auth=(client_id, client_secret)
     )
-    
+
     if response.status_code != 200:
         print(f"Error: Failed to obtain access token. Status code: {response.status_code}")
         print(f"Response: {response.text}")
         return {'access_token': None}
-        
+
     return response.json()
 
 def get_current_auctions(config):
     response = create_access_token(CLIENT_KEY, SECRET_KEY)
     token = response['access_token']
-    
+
     if not token:
         print("Error: Failed to obtain access token")
         return []
-        
+
     print('Token created')
-    
+
     headers = {
         'Authorization': f'Bearer {token}',
         'Accept': 'application/json'
     }
-    
+
     url = (
         'https://us.api.blizzard.com/data/wow/connected-realm/'
         f"{REALM_ID}/auctions"
         '?namespace=dynamic-us&locale=en_US'
     )
-    
+
     response = requests.get(url, headers=headers)
     print('Request done')
-    
+
     if response.status_code != 200:
         print(f"Error: API request failed with status code {response.status_code}")
         print(f"Response: {response.text}")
         return []
-    
+
     data = response.json()
-    
+
     return data
 
 def load_auctions_from_sample(
@@ -156,7 +156,7 @@ def load_auctions_from_sample(
                 json_data = json.load(f)
         except Exception:
             continue
-        
+
         for auction in json_data.get('auctions', []):
             if 'pet_species_id' in auction.get('item', {}):
                 continue
@@ -200,7 +200,7 @@ def load_auctions_from_sample(
             time_left = time_left_mapping.get(time_left_key, 0.0)
 
             context = context_to_idx.get(str(auction['item'].get('context', 0)), 1)
-            bonus_lists = [bonus_to_idx.get(str(b), 1) for b in auction['item'].get('bonus_lists', [])]
+            bonus_ids = [bonus_to_idx.get(str(b), 1) for b in auction['item'].get('bonus_lists', [])]
 
             modifier_types = []
             modifier_values = []
@@ -211,24 +211,24 @@ def load_auctions_from_sample(
             first_appearance = auction_appearances[auction_id]['first']
             last_appearance = auction_appearances[auction_id]['last']
 
-            current_hours = (snapshot_time - first_appearance).total_seconds() / 3600.0
+            listing_age = (snapshot_time - first_appearance).total_seconds() / 3600.0
             if include_targets:
-                hours_on_sale = (last_appearance - snapshot_time).total_seconds() / 3600.0
+                listing_duration = (last_appearance - snapshot_time).total_seconds() / 3600.0
 
-            time_offset = int((prediction_time - snapshot_time).total_seconds() // 3600)  # negative if future
+            snapshot_offset = int((prediction_time - snapshot_time).total_seconds() // 3600)  # negative if future
             hour_of_week = snapshot_time.weekday() * 24 + snapshot_time.hour  # 0..167
 
             if include_targets:
                 rows.append([
                     auction_id, item_index, bid, buyout, quantity, time_left, context,
-                    bonus_lists, modifier_types, modifier_values,
-                    snapshot_time, time_offset, hour_of_week, current_hours, hours_on_sale
+                    bonus_ids, modifier_types, modifier_values,
+                    snapshot_time, snapshot_offset, hour_of_week, listing_age, listing_duration
                 ])
             else:
                 rows.append([
                     auction_id, item_index, bid, buyout, quantity, time_left, context,
-                    bonus_lists, modifier_types, modifier_values,
-                    snapshot_time, time_offset, hour_of_week, current_hours
+                    bonus_ids, modifier_types, modifier_values,
+                    snapshot_time, snapshot_offset, hour_of_week, listing_age
                 ])
 
     if include_targets:
@@ -236,8 +236,8 @@ def load_auctions_from_sample(
             rows,
             columns=[
                 'id','item_index','bid','buyout','quantity','time_left','context',
-                'bonus_lists','modifier_types','modifier_values',
-                'snapshot_time','time_offset','hour_of_week','current_hours','hours_on_sale'
+                'bonus_ids','modifier_types','modifier_values',
+                'snapshot_time','snapshot_offset','hour_of_week','listing_age','listing_duration'
             ]
         )
     else:
@@ -245,8 +245,8 @@ def load_auctions_from_sample(
             rows,
             columns=[
                 'id','item_index','bid','buyout','quantity','time_left','context',
-                'bonus_lists','modifier_types','modifier_values',
-                'snapshot_time','time_offset','hour_of_week','current_hours'
+                'bonus_ids','modifier_types','modifier_values',
+                'snapshot_time','snapshot_offset','hour_of_week','listing_age'
             ]
         )
 

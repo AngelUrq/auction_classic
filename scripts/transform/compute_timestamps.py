@@ -52,9 +52,13 @@ def process_auctions(args):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Check JSON files in auctions folder')
-    parser.add_argument('--data_dir', type=str, required=True, help='Path to the auctions folder')
-    parser.add_argument('--output_file', type=str, required=True, help='Path to the output file (generated/timestamps.json)')
+    parser.add_argument('--data_dir', type=str, default='data/tww/auctions/', help='Path to the auctions folder')
+    parser.add_argument('--output_file', type=str, default='generated/timestamps.json', help='Path to the output file')
     args = parser.parse_args()
+
+    if os.path.exists(args.output_file):
+        print(f"Skipping: {args.output_file} already exists.")
+        exit(0)
 
     start_time = time.time()
     auction_appearances = process_auctions(args)

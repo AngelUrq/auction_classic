@@ -23,6 +23,11 @@ def main():
 
     os.makedirs(output_dir, exist_ok=True)
 
+    idx_map_path = os.path.join(output_dir, "idx_map_global.pkl")
+    if os.path.exists(idx_map_path):
+        print(f"Skipping: {idx_map_path} already exists.")
+        return
+
     print(f"Loading indices from {indices_path} ...", flush=True)
     df = pd.read_parquet(indices_path)
     df = df[["record", "item_index", "start", "length"]]
@@ -60,8 +65,8 @@ def main():
         dtype=np.int32,
         shape=(TOTAL_ROWS,),
     )
-    bonus_lists_mm = np.memmap(
-        os.path.join(output_dir, "bonus_lists.npy"),
+    bonus_ids_mm = np.memmap(
+        os.path.join(output_dir, "bonus_ids.npy"),
         mode="w+",
         dtype=np.int32,
         shape=(TOTAL_ROWS, 9),
@@ -93,13 +98,13 @@ def main():
 
             data_mm[global_slice]            = grp["data"][local_slice]
             contexts_mm[global_slice]        = grp["contexts"][local_slice]
-            bonus_lists_mm[global_slice]     = grp["bonus_lists"][local_slice]
+            bonus_ids_mm[global_slice]       = grp["bonus_ids"][local_slice]
             modifier_types_mm[global_slice]  = grp["modifier_types"][local_slice]
             modifier_values_mm[global_slice] = grp["modifier_values"][local_slice]
 
     data_mm.flush()
     contexts_mm.flush()
-    bonus_lists_mm.flush()
+    bonus_ids_mm.flush()
     modifier_types_mm.flush()
     modifier_values_mm.flush()
 

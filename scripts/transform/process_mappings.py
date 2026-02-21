@@ -92,9 +92,14 @@ def process_mappings(args):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Generate mapping files from auction data')
-    parser.add_argument('--data_dir', type=str, required=True, help='Path to the auctions folder')
-    parser.add_argument('--output_dir', type=str, required=True, help='Path to output the mapping files')
+    parser.add_argument('--data_dir', type=str, default='data/tww/auctions/', help='Path to the auctions folder')
+    parser.add_argument('--output_dir', type=str, default='generated/mappings/', help='Path to output the mapping files')
     args = parser.parse_args()
-    
+
+    mapping_files = ['item_to_idx.json', 'context_to_idx.json', 'bonus_to_idx.json', 'modtype_to_idx.json']
+    if all(os.path.exists(os.path.join(args.output_dir, f)) for f in mapping_files):
+        print(f"Skipping: mapping files already exist in {args.output_dir}")
+        exit(0)
+
     process_mappings(args)
     

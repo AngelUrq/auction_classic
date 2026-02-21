@@ -24,7 +24,7 @@ model = None
 feature_stats = None
 prediction_time = None
 recommendations = None
-ckpt_path = 'models/transformer-4.2M-quantile-historical_72-lr1e-04-bs64/last-v3.ckpt'
+ckpt_path = './models/transformer-4.2M-quantile-historical_72-lr1e-05-bs64/last.ckpt'
 max_hours_back = 72
 max_sequence_length = 4096
 sold_threshold = 8
@@ -33,10 +33,10 @@ sold_threshold = 8
 def load_data_and_model():
     """Load data and model only once"""
     global model_loaded, df_auctions, model, feature_stats, prediction_time
-    
+
     if model_loaded:
         return
-    
+
     base_path = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     data_path = os.path.join(base_path, "data/tww/auctions/")
 
@@ -56,7 +56,7 @@ def load_data_and_model():
     }
 
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
-    
+
     prediction_time = datetime.now()
     print(f'Prediction time: {prediction_time}')
 
@@ -67,7 +67,7 @@ def load_data_and_model():
 
     with open(os.path.join(mappings_dir, 'context_to_idx.json'), 'r') as f:
         context_to_idx = json.load(f)
-        
+
     with open(os.path.join(mappings_dir, 'bonus_to_idx.json'), 'r') as f:
         bonus_to_idx = json.load(f)
 
@@ -80,7 +80,10 @@ def load_data_and_model():
 
     model = AuctionTransformer.load_from_checkpoint(
         os.path.join(base_path, ckpt_path),
-        map_location=device
+        map_location=device,
+        n_items=17955,
+        n_contexts=64,
+        n_bonuses=1405
     )
 
     print(f'Number of model parameters: {sum(p.numel() for p in model.parameters())}')
@@ -88,19 +91,19 @@ def load_data_and_model():
     print('Pre-trained Transformer model loaded successfully.')
 
     df_auctions = load_auctions_from_sample(
-        data_path, 
-        prediction_time, 
-        time_left_mapping, 
-        item_to_idx, 
-        context_to_idx, 
-        bonus_to_idx, 
-        modtype_to_idx, 
+        data_path,
+        prediction_time,
+        time_left_mapping,
+        item_to_idx,
+        context_to_idx,
+        bonus_to_idx,
+        modtype_to_idx,
         max_hours_back=max_hours_back,
         include_targets=False
     )
     df_auctions['item_id'] = df_auctions['item_index'].map(idx_to_item)
     print(f'Number of auctions loaded: {len(df_auctions)}')
-    
+
     model_loaded = True
     return "Model and data loaded successfully!"
 
@@ -111,7 +114,7 @@ def generate_recommendations(expected_profit, median_discount=0.75):
     if not model_loaded:
         load_data_and_model()
 
-    df_now = df_auctions[df_auctions["time_offset"] == 0].copy()
+    df_now = df_auctions[df_auctions["snapshot_offset"] == 0].copy()
     if df_now.empty:
         return pd.DataFrame()
 
@@ -131,13 +134,13 @@ def generate_recommendations(expected_profit, median_discount=0.75):
         if potential_profit < expected_profit:
             continue
 
-        # Full per-item context (0..max_hours_back), drop this auction id EVERYWHERE
+        # Full per-item context (0..max_hours_back), drop this auction id ONLY at the current time step
         df_item_full = df_auctions[
             (df_auctions["item_index"] == item_index) &
-            (df_auctions["time_offset"] >= 0) &
-            (df_auctions["time_offset"] <= max_hours_back)
+            (df_auctions["snapshot_offset"] >= 0) &
+            (df_auctions["snapshot_offset"] <= max_hours_back)
         ].copy()
-        df_item_full = df_item_full[df_item_full["id"] != auction_id]
+        df_item_full = df_item_full[~((df_item_full["id"] == auction_id) & (df_item_full["snapshot_offset"] == 0))]
 
         # Fresh relist row at present target price (reuse the same auction id)
         relist_row = cheapest_row.copy()
@@ -145,9 +148,9 @@ def generate_recommendations(expected_profit, median_discount=0.75):
         relist_row["buyout"] = float(target_price)
         relist_row["bid"] = 0.0
         relist_row["time_left"] = 48.0
-        relist_row["current_hours"] = 0.0
+        relist_row["listing_age"] = 0.0
         relist_row["snapshot_time"] = prediction_time
-        relist_row["time_offset"] = 0
+        relist_row["snapshot_offset"] = 0
         relist_row["hour_of_week"] = prediction_time.weekday() * 24 + prediction_time.hour
 
         # Append and predict with full context
@@ -175,7 +178,7 @@ def generate_recommendations(expected_profit, median_discount=0.75):
             "buyout": round(cheapest_buyout, 2),
             "suggested_price": round(target_price, 2),
             "quantity": pred_row.get("quantity", cheapest_row.get("quantity")),
-            "bonus_lists": pred_row.get("bonus_lists", relist_row.get("bonus_lists")),
+            "bonus_ids": pred_row.get("bonus_ids", relist_row.get("bonus_ids")),
             "modifier_types": pred_row.get("modifier_types", relist_row.get("modifier_types")),
             "modifier_values": pred_row.get("modifier_values", relist_row.get("modifier_values")),
             "prediction_q10": float(pred_row["prediction_q10"]),
@@ -197,12 +200,12 @@ def generate_recommendations(expected_profit, median_discount=0.75):
 def generate_recommendations_ui(expected_profit, threshold):
     """UI function for generating recommendations"""
     global recommendations, sold_threshold
-    
+
     expected_profit = float(expected_profit)
     sold_threshold = float(threshold)
-    
+
     recommendations = generate_recommendations(expected_profit)
-    
+
     if recommendations.empty:
         return "No recommendations found matching your criteria. Try lowering the expected profit.", pd.DataFrame()
     else:
@@ -212,39 +215,39 @@ def create_ui():
     """Create the Gradio interface"""
     with gr.Blocks(title="🎮 Auction House Data 💰", theme=gr.themes.Default()) as app:
         gr.Markdown("# Auction House Data")
-        
+
         with gr.Tab("Current Auctions"):
             gr.Markdown("## Current Auctions")
-            
+
             with gr.Row():
                 item_search = gr.Textbox(label="Search by Item ID", placeholder="Enter item ID...")
                 search_button = gr.Button("Search")
                 time_offset_filter = gr.Slider(label="Display Time Offset (hours ago)", minimum=0, maximum=48, value=0, step=1)
                 predict_button = gr.Button("Predict Sale Probability")
                 store_csv_button = gr.Button("Store CSV")
-            
-            display_columns = ['item_id', 'buyout', 'quantity', 'time_left', 'context', 'bonus_lists', 'modifier_types', 'modifier_values', 'current_hours', 'time_offset']
+
+            display_columns = ['item_id', 'buyout', 'quantity', 'time_left', 'context', 'bonus_ids', 'modifier_types', 'modifier_values', 'listing_age', 'snapshot_offset']
 
             initial_display = pd.DataFrame()
             if df_auctions is not None:
-                current_slice = df_auctions[df_auctions['time_offset'] == 0]
+                current_slice = df_auctions[df_auctions['snapshot_offset'] == 0]
                 initial_display = current_slice[display_columns].head(100)
 
             auctions_display = gr.Dataframe(initial_display, interactive=False)
             store_csv_status = gr.Markdown("")
-            
+
             def filter_auctions(item_id, time_offset_value):
                 if df_auctions is None:
                     return pd.DataFrame()
 
                 item_id = (item_id or "").strip()
                 time_offset_value = float(time_offset_value or 0)
-                filtered_df = df_auctions[df_auctions['time_offset'] == time_offset_value]
+                filtered_df = df_auctions[df_auctions['snapshot_offset'] == time_offset_value]
                 if item_id:
                     filtered_df = filtered_df[filtered_df['item_id'] == item_id]
 
                 return filtered_df[display_columns].head(100)
-            
+
             def predict_filtered_auctions(item_id, time_offset_value):
                 global model, feature_stats, prediction_time
 
@@ -258,23 +261,23 @@ def create_ui():
                     filtered_df = df_auctions.head(100).copy()
                 else:
                     filtered_df = df_auctions[df_auctions['item_id'] == item_id].copy()
-                
+
                 if filtered_df.empty:
                     return pd.DataFrame()
 
                 prediction_results = predict_dataframe(
-                    model, 
-                    filtered_df, 
-                    prediction_time, 
+                    model,
+                    filtered_df,
+                    prediction_time,
                     feature_stats,
                     max_hours_back=max_hours_back,
                     max_sequence_length=max_sequence_length
                 )
-                
-                prediction_results = prediction_results[prediction_results['time_offset'] == 0]
+
+                prediction_results = prediction_results[prediction_results['snapshot_offset'] == 0]
 
                 if prediction_results.empty:
-                    return pd.DataFrame(columns=['item_id', 'buyout', 'quantity', 'time_left', 'context', 'bonus_lists', 'modifier_types', 'modifier_values', 'current_hours', 'prediction_q10', 'prediction_q50', 'prediction_q90', 'is_short_duration'])
+                    return pd.DataFrame(columns=['item_id', 'buyout', 'quantity', 'time_left', 'context', 'bonus_ids', 'modifier_types', 'modifier_values', 'listing_age', 'prediction_q10', 'prediction_q50', 'prediction_q90', 'is_short_duration'])
 
                 display_columns_prediction = display_columns + ['prediction_q10', 'prediction_q50', 'prediction_q90', 'is_short_duration']
                 return prediction_results[display_columns_prediction].head(100)
@@ -291,7 +294,7 @@ def create_ui():
                 if item_df.empty:
                     return f"No rows found for item {item_id}."
 
-                item_df = item_df.sort_values("current_hours")
+                item_df = item_df.sort_values("listing_age")
 
                 output_dir = Path(__file__).resolve().parent.parent / "generated"
                 output_dir.mkdir(parents=True, exist_ok=True)
@@ -300,7 +303,7 @@ def create_ui():
                 item_df.to_csv(output_path, index=False)
 
                 return f"Stored {len(item_df)} rows to {output_path}."
-            
+
             search_button.click(
                 filter_auctions,
                 inputs=[item_search, time_offset_filter],
@@ -312,7 +315,7 @@ def create_ui():
                 inputs=[item_search, time_offset_filter],
                 outputs=[auctions_display]
             )
-            
+
             predict_button.click(
                 predict_filtered_auctions,
                 inputs=[item_search, time_offset_filter],
@@ -324,7 +327,7 @@ def create_ui():
                 inputs=[item_search, time_offset_filter],
                 outputs=[store_csv_status]
             )
-        
+
         with gr.Tab("Recommendations"):
             gr.Markdown("## Auction Recommendations")
             gr.Markdown("This tab recommends items to flip using their **25th percentile (q25) price * 0.7** as the suggested selling price.")
@@ -335,21 +338,21 @@ def create_ui():
             gr.Markdown("- **prediction_q90**: 90th percentile prediction (optimistic - 90% chance it sells faster)")
             gr.Markdown("- **is_short_duration**: Probability (0-1) that the item will sell in less than 8 hours")
             gr.Markdown(f"Items are considered likely to sell if prediction_q50 < {sold_threshold} hours")
-            
+
             with gr.Row():
                 expected_profit = gr.Number(label="Minimum Expected Profit Filter (gold)", value=100, minimum=0, step=100)
                 sold_threshold_input = gr.Slider(label="Sale Time Threshold (hours)", minimum=1, maximum=24, value=4, step=1)
-        
+
             generate_button = gr.Button("Generate Recommendations")
             result_text = gr.Markdown()
             recommendations_output = gr.Dataframe()
-            
+
             generate_button.click(
-                generate_recommendations_ui, 
-                inputs=[expected_profit, sold_threshold_input], 
+                generate_recommendations_ui,
+                inputs=[expected_profit, sold_threshold_input],
                 outputs=[result_text, recommendations_output]
             )
-        
+
         with gr.Tab("Individual Flipping"):
             gr.Markdown("## Individual Item Flipping Recommendations")
             gr.Markdown("**Prediction columns explained:**")
@@ -357,19 +360,19 @@ def create_ui():
             gr.Markdown("- **predicted_hours_q50**: 50th percentile (median hours to sale)")
             gr.Markdown("- **predicted_hours_q90**: 90th percentile (pessimistic timing)")
             gr.Markdown("- **is_short_duration**: Probability (0-1) that the item will sell in less than 8 hours")
-            
+
             with gr.Row():
                 flip_item_search = gr.Textbox(label="Search by Item ID", placeholder="Enter item ID...")
                 flip_search_button = gr.Button("Search")
-            
+
             item_auctions_display = gr.Dataframe(interactive=False)
-            
+
             with gr.Row():
                 custom_buyout = gr.Number(label="Custom Buyout Price (gold)", value=0, minimum=0, step=100)
                 predict_flip_button = gr.Button("Predict Flip")
-            
+
             flip_result = gr.Dataframe(interactive=False)
-            
+
             def search_item_for_flip(item_id):
                 global df_auctions
 
@@ -379,13 +382,14 @@ def create_ui():
                 item_id = (item_id or "").strip()
                 if not item_id or df_auctions is None:
                     return pd.DataFrame()
-                
+
                 filtered_df = df_auctions[
                     (df_auctions['item_id'] == item_id) &
-                    (df_auctions['time_offset'] == 0)
+                    (df_auctions['snapshot_offset'] == 0)
                 ]
-                display_columns = ['item_id', 'buyout', 'quantity', 'time_left', 'context', 'bonus_lists', 'modifier_types', 'modifier_values']
-                return filtered_df[display_columns]            
+                display_columns = ['item_id', 'buyout', 'quantity', 'time_left', 'context', 'bonus_ids', 'modifier_types', 'modifier_values']
+                return filtered_df[display_columns]
+
             def predict_item_flip(item_id, custom_price):
                 global model, feature_stats, prediction_time, max_hours_back, df_auctions
 
@@ -397,7 +401,7 @@ def create_ui():
                     return pd.DataFrame()
 
                 item_df = df_auctions[df_auctions['item_id'] == item_id].copy()
-                
+
                 if item_df.empty:
                     print("No auctions found for this item")
                     return pd.DataFrame()
@@ -414,28 +418,28 @@ def create_ui():
 
                 df_item_full = df_auctions[
                     (df_auctions['item_index'] == item_index) &
-                    (df_auctions['time_offset'] >= 0) &
-                    (df_auctions['time_offset'] <= max_hours_back)
+                    (df_auctions['snapshot_offset'] >= 0) &
+                    (df_auctions['snapshot_offset'] <= max_hours_back)
                 ].copy()
 
-                df_item_full = df_item_full[df_item_full['id'] != auction_id]
+                df_item_full = df_item_full[~((df_item_full['id'] == auction_id) & (df_item_full['snapshot_offset'] == 0))]
 
                 # New relist row mirrors recommendation flow
                 relist_row = lowest_auction.copy()
                 relist_row['buyout'] = float(target_price)
                 relist_row['bid'] = 0.0
                 relist_row['time_left'] = 48.0
-                relist_row['current_hours'] = 0.0
+                relist_row['listing_age'] = 0.0
                 relist_row['snapshot_time'] = prediction_time
-                relist_row['time_offset'] = 0
+                relist_row['snapshot_offset'] = 0
                 relist_row['hour_of_week'] = prediction_time.weekday() * 24 + prediction_time.hour
 
                 df_item_full = pd.concat([df_item_full, pd.DataFrame([relist_row])], ignore_index=True)
 
                 prediction_df = predict_dataframe(
-                    model, 
-                    df_item_full, 
-                    prediction_time, 
+                    model,
+                    df_item_full,
+                    prediction_time,
                     feature_stats,
                     max_hours_back=max_hours_back,
                     max_sequence_length=max_sequence_length
@@ -455,7 +459,7 @@ def create_ui():
                     return pd.DataFrame()
 
                 flip_prediction = flip_prediction.iloc[0]
-                
+
                 result = pd.DataFrame([{
                     'item_id': lowest_auction['item_id'],
                     'quantity': lowest_auction['quantity'],
@@ -467,24 +471,25 @@ def create_ui():
                     'predicted_hours_q90': flip_prediction['prediction_q90'],
                     'is_short_duration': flip_prediction['is_short_duration']
                 }])
-                
-                return result            
+
+                return result
+
             flip_search_button.click(
                 search_item_for_flip,
                 inputs=[flip_item_search],
                 outputs=[item_auctions_display]
             )
-            
+
             predict_flip_button.click(
                 predict_item_flip,
                 inputs=[flip_item_search, custom_buyout],
                 outputs=[flip_result]
             )
-            
+
     return app
 
 if __name__ == "__main__":
     load_data_and_model()
-    
+
     app = create_ui()
     app.launch(share=True)

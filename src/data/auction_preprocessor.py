@@ -131,7 +131,7 @@ class AuctionPreprocessor(BaseEstimator, TransformerMixin):
 
     def transform(self, df):
         X = df[self.feature_names].copy()
-        y = df['hours_on_sale']
+        y = df['listing_duration']
 
         X = self.column_transformer.transform(X)
         y = np.array(y)

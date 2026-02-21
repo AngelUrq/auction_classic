@@ -21,7 +21,7 @@ class AuctionDataset(Dataset):
         root is the directory created by convert_hdf5_to_npy.py and must contain:
             data.npy
             contexts.npy
-            bonus_lists.npy
+            bonus_ids.npy
             modifier_types.npy
             modifier_values.npy
             idx_map_global.pkl
@@ -36,8 +36,8 @@ class AuctionDataset(Dataset):
             "buyout": 1,
             "quantity": 2,
             "time_left": 3,
-            "current_hours": 4,
-            "hours_on_sale": 5,
+            "listing_age": 4,
+            "listing_duration": 5,
         }
 
         data_mm = np.memmap(os.path.join(root, "data.npy"), mode="r", dtype=np.float32)
@@ -48,8 +48,8 @@ class AuctionDataset(Dataset):
             os.path.join(root, "contexts.npy"), mode="r", dtype=np.int32
         )
 
-        self.bonus_lists = np.memmap(
-            os.path.join(root, "bonus_lists.npy"), mode="r", dtype=np.int32
+        self.bonus_ids = np.memmap(
+            os.path.join(root, "bonus_ids.npy"), mode="r", dtype=np.int32
         ).reshape((total_rows, 9))
 
         self.modifier_types = np.memmap(
@@ -95,70 +95,70 @@ class AuctionDataset(Dataset):
 
         window = slice(earliest_start, latest_end)
 
-        auctions_np = self.data[window]
+        auction_features_np = self.data[window]
         contexts_np = self.contexts[window]
-        bonus_lists_np = self.bonus_lists[window]
+        bonus_ids_np = self.bonus_ids[window]
         modifier_types_np = self.modifier_types[window]
         modifier_values_np = self.modifier_values[window]
 
         hour_of_week_vals = []
-        time_offset_vals = []
+        snapshot_offset_vals = []
         for start, length, how, off in present:
             hour_of_week_vals.append(np.full(length, how, dtype=np.int32))
-            time_offset_vals.append(np.full(length, off, dtype=np.int32))
+            snapshot_offset_vals.append(np.full(length, off, dtype=np.int32))
 
         hour_of_week_np = np.concatenate(hour_of_week_vals)
-        time_offset_np = np.concatenate(time_offset_vals)
+        snapshot_offset_np = np.concatenate(snapshot_offset_vals)
 
-        auctions = torch.tensor(auctions_np, dtype=torch.float32)
+        auction_features = torch.tensor(auction_features_np, dtype=torch.float32)
         modifier_values = torch.tensor(modifier_values_np, dtype=torch.float32)
 
         contexts = torch.tensor(contexts_np, dtype=torch.int32)
-        bonus_lists = torch.tensor(bonus_lists_np, dtype=torch.int32)
+        bonus_ids = torch.tensor(bonus_ids_np, dtype=torch.int32)
         modifier_types = torch.tensor(modifier_types_np, dtype=torch.int32)
 
         hour_of_week = torch.tensor(hour_of_week_np, dtype=torch.int32)
-        time_offset = torch.tensor(time_offset_np, dtype=torch.int32)
+        snapshot_offset = torch.tensor(snapshot_offset_np, dtype=torch.int32)
 
-        hours_on_sale = auctions[:, self.column_map["hours_on_sale"]]
-        auctions = auctions[:, :-1]
+        listing_duration = auction_features[:, self.column_map["listing_duration"]]
+        auction_features = auction_features[:, :-1]
 
-        auctions[:, self.column_map["bid"]] = torch.log1p(
-            auctions[:, self.column_map["bid"]]
+        auction_features[:, self.column_map["bid"]] = torch.log1p(
+            auction_features[:, self.column_map["bid"]]
         )
-        auctions[:, self.column_map["buyout"]] = torch.log1p(
-            auctions[:, self.column_map["buyout"]]
+        auction_features[:, self.column_map["buyout"]] = torch.log1p(
+            auction_features[:, self.column_map["buyout"]]
         )
         modifier_values = torch.log1p(modifier_values)
 
-        current_hours_raw = auctions[:, self.column_map["current_hours"]].clone()
-        time_left_raw = auctions[:, self.column_map["time_left"]].clone()
+        listing_age = auction_features[:, self.column_map["listing_age"]].clone()
+        time_left = auction_features[:, self.column_map["time_left"]].clone()
 
         if self.feature_stats is not None:
             means = self.feature_stats["means"][:5].float()
             stds = self.feature_stats["stds"][:5].float()
-            auctions = (auctions - means) / (stds + 1e-6)
-            
+            auction_features = (auction_features - means) / (stds + 1e-6)
+
             mod_mean = self.feature_stats["modifiers_mean"].float()
             mod_std = self.feature_stats["modifiers_std"].float()
             modifier_values = (modifier_values - mod_mean) / (mod_std + 1e-6)
 
         item_index_tensor = torch.full(
-            (auctions.size(0),), item_idx, dtype=torch.int32
+            (auction_features.size(0),), item_idx, dtype=torch.int32
         )
 
-        y = hours_on_sale
+        y = listing_duration
 
         return {
-            "auctions": auctions,
+            "auction_features": auction_features,
             "item_index": item_index_tensor,
             "contexts": contexts,
-            "bonus_lists": bonus_lists,
+            "bonus_ids": bonus_ids,
             "modifier_types": modifier_types,
             "modifier_values": modifier_values,
             "hour_of_week": hour_of_week,
-            "time_offset": time_offset,
-            "current_hours_raw": current_hours_raw,
-            "time_left_raw": time_left_raw,
-            "target": y,
+            "snapshot_offset": snapshot_offset,
+            "listing_age": listing_age,
+            "time_left": time_left,
+            "listing_duration": y,
         }

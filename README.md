@@ -233,9 +233,9 @@ Output:
 sequences.h5
 └── items/
     └── {item_index}/
-        ├── data           # (N, 6) float32: bid, buyout, quantity, time_left, current_hours, hours_on_sale
+        ├── data           # (N, 6) float32: bid, buyout, quantity, time_left, listing_age, listing_duration
         ├── contexts       # (N,) int32: context IDs
-        ├── bonus_lists    # (N, 9) int32: bonus IDs (padded)
+        ├── bonus_ids      # (N, 9) int32: bonus IDs (padded)
         ├── modifier_types # (N, 11) int32: modifier type IDs (padded)
         └── modifier_values# (N, 11) float32: modifier values (padded)
 ```
@@ -286,7 +286,7 @@ trainer.fit(model, train_dataloader, val_dataloader)
 
 - **Quantile Loss**: Predicts 10th, 50th, and 90th percentiles for uncertainty estimation
 - **OneCycleLR Scheduler**: Cosine annealing with warmup
-- **Weighted Loss**: Exponential decay weighting based on `current_hours`
+- **Weighted Loss**: Exponential decay weighting based on `listing_age`
 - **W&B Integration**: Automatic logging of metrics, gradients, and predictions
 
 ### RNN Alternative

@@ -7,7 +7,7 @@ import argparse
 from datetime import datetime, timedelta
 from tqdm import tqdm
 
-def compute_auction_hours(timestamps):  
+def compute_auction_hours(timestamps):
     print('Computing auction hours...')
     data = []
 
@@ -15,53 +15,53 @@ def compute_auction_hours(timestamps):
         first_appearance = datetime.strptime(auction['first_appearance'], '%Y-%m-%d %H:%M:%S')
         last_appearance = datetime.strptime(auction['last_appearance'], '%Y-%m-%d %H:%M:%S')
 
-        hours_on_sale = (last_appearance - first_appearance).total_seconds() / 3600
+        listing_duration = (last_appearance - first_appearance).total_seconds() / 3600
 
         data.append((
             auction_id,
             auction['first_appearance'],
             auction['last_appearance'],
             auction['item_id'],
-            hours_on_sale
+            listing_duration
         ))
 
-    df = pd.DataFrame(data, columns=['auction_id', 'first_appearance', 'last_appearance', 'item_id', 'hours_on_sale'])
+    df = pd.DataFrame(data, columns=['auction_id', 'first_appearance', 'last_appearance', 'item_id', 'listing_duration'])
 
     df['first_appearance'] = pd.to_datetime(df['first_appearance'])
     df['last_appearance'] = pd.to_datetime(df['last_appearance'])
 
-    df = df[df['hours_on_sale'] <= 50]
+    df = df[df['listing_duration'] <= 50]
 
     return df
 
 def calculate_weekly_averages(df):
     print('Calculating weekly averages...')
     df['first_appearance'] = pd.to_datetime(df['first_appearance'])
-    
+
     min_date = df['first_appearance'].min() + pd.Timedelta(days=9)
     max_date = df['first_appearance'].max()
-    
+
     date_range = pd.date_range(min_date, max_date, freq='D')
     weekly_averages = []
-    
+
     for current_date in tqdm(date_range):
         end_date = current_date - pd.Timedelta(days=2)
         start_date = current_date - pd.Timedelta(days=9)
-        
+
         mask = (
-            (df['first_appearance'] >= start_date) & 
+            (df['first_appearance'] >= start_date) &
             (df['first_appearance'] <= end_date)
         )
         week_data = df[mask]
-        
-        item_averages = week_data.groupby('item_id')['hours_on_sale'].mean().reset_index()
+
+        item_averages = week_data.groupby('item_id')['listing_duration'].mean().reset_index()
         item_averages['date'] = current_date
-        
+
         if len(item_averages) > 0:
             weekly_averages.append(item_averages)
-    
+
     result = pd.concat(weekly_averages, ignore_index=True)
-    return result[['date', 'item_id', 'hours_on_sale']]
+    return result[['date', 'item_id', 'listing_duration']]
 
 def main(args):
     print('Loading timestamps...')

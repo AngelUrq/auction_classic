@@ -272,10 +272,6 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-
-
-
-
 def main():
     args = parse_args()
     
@@ -322,11 +318,19 @@ def main():
             logger.info(f"  Resizing modifier_embeddings to {n_modtypes}")
             model.modifier_embeddings = nn.Embedding(n_modtypes, model.hparams.embedding_dim)
 
-            # Also reset time_offset_embeddings if max_hours_back changed
+            # Also reset snapshot_offset_embeddings if max_hours_back changed
             # Current max_hours_back from config
             current_max_hours = cfg.data.max_hours_back
-            logger.info(f"  Resizing time_offset_embeddings to {current_max_hours + 1}")
-            model.time_offset_embeddings = nn.Embedding(current_max_hours + 1, model.hparams.embedding_dim)
+            logger.info(f"  Resizing snapshot_offset_embeddings to {current_max_hours + 1}")
+            model.snapshot_offset_embeddings = nn.Embedding(current_max_hours + 1, model.hparams.embedding_dim)
+
+            # Update hyperparameters to match new embedding sizes
+            # This ensures the checkpoint saves the correct sizes
+            model.hparams.n_items = n_items
+            model.hparams.n_contexts = n_contexts
+            model.hparams.n_bonuses = n_bonuses
+            model.hparams.n_modtypes = n_modtypes
+            model.hparams.max_hours_back = current_max_hours
 
             # Recalculate param count after changes
             param_count = sum(p.numel() for p in model.parameters())
