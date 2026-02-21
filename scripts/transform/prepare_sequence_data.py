@@ -53,7 +53,7 @@ def _check_item_datasets(h5_file, item_id_str):
     grp = grp_root.require_group(item_id_str)
 
     if 'data' not in grp:
-        grp.create_dataset('data', shape=(0, 6), maxshape=(None, 6), dtype='float32', chunks=(ROW_CHUNK, 6))
+        grp.create_dataset('data', shape=(0, 7), maxshape=(None, 7), dtype='float32', chunks=(ROW_CHUNK, 7))
     if 'contexts' not in grp:
         grp.create_dataset('contexts', shape=(0,), maxshape=(None,), dtype='int32', chunks=(ROW_CHUNK,))
     if 'bonus_ids' not in grp:
@@ -71,7 +71,7 @@ def _append_item_block(grp, data_h, contexts_h, bonus_ids_h, modifier_types_h, m
     old = grp['data'].shape[0]
     new = old + n
 
-    grp['data'].resize((new, 6))
+    grp['data'].resize((new, 7))
     grp['contexts'].resize((new,))
     grp['bonus_ids'].resize((new, MAX_BONUSES))
     grp['modifier_types'].resize((new, MAX_MODIFIERS))
@@ -203,7 +203,12 @@ def process_auctions(args):
                     modifier_types_h = modifier_types_h[:MAX_SEQUENCE_LENGTH]
                     modifier_values_h = modifier_values_h[:MAX_SEQUENCE_LENGTH]
 
-                item_listing_duration = data_h[:, 5]
+                buyout_col = data_h[:, 1]
+                unique_sorted = np.sort(np.unique(buyout_col))
+                buyout_rank = np.searchsorted(unique_sorted, buyout_col).astype(np.float32)
+                data_h = np.column_stack([data_h[:, :5], buyout_rank, data_h[:, 5]])  # (N, 7)
+
+                item_listing_duration = data_h[:, 6]
                 item_listing_age = data_h[:, 4]
                 stats_tuple = (
                     int(len(item_listing_duration)),

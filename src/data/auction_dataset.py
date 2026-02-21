@@ -37,12 +37,13 @@ class AuctionDataset(Dataset):
             "quantity": 2,
             "time_left": 3,
             "listing_age": 4,
-            "listing_duration": 5,
+            "buyout_rank": 5,
+            "listing_duration": 6,
         }
 
         data_mm = np.memmap(os.path.join(root, "data.npy"), mode="r", dtype=np.float32)
-        total_rows = data_mm.size // 6
-        self.data = data_mm.reshape((total_rows, 6))
+        total_rows = data_mm.size // 7
+        self.data = data_mm.reshape((total_rows, 7))
 
         self.contexts = np.memmap(
             os.path.join(root, "contexts.npy"), mode="r", dtype=np.int32
@@ -120,8 +121,8 @@ class AuctionDataset(Dataset):
         hour_of_week = torch.tensor(hour_of_week_np, dtype=torch.int32)
         snapshot_offset = torch.tensor(snapshot_offset_np, dtype=torch.int32)
 
-        listing_duration = auction_features[:, self.column_map["listing_duration"]]
-        auction_features = auction_features[:, :-1]
+        listing_duration = auction_features[:, self.column_map["listing_duration"]]  # col 6
+        auction_features = auction_features[:, :5]  # bid, buyout, qty, time_left, listing_age
 
         auction_features[:, self.column_map["bid"]] = torch.log1p(
             auction_features[:, self.column_map["bid"]]
