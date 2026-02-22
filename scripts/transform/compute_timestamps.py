@@ -36,10 +36,12 @@ def process_auctions(args):
                         auction_appearances[auction_id] = {
                             'first_appearance': timestamp.strftime("%Y-%m-%d %H:%M:%S"), 
                             'last_appearance': timestamp.strftime("%Y-%m-%d %H:%M:%S"),
+                            'last_time_left': auction['time_left'],
                             'item_id': auction['item']['id'],
                         }
                     else:
                         auction_appearances[auction_id]['last_appearance'] = timestamp.strftime("%Y-%m-%d %H:%M:%S")
+                        auction_appearances[auction_id]['last_time_left'] = auction['time_left']
                 
             except json.JSONDecodeError as e:
                 print(f"Error loading file {filepath}: {e}")
@@ -52,7 +54,7 @@ def process_auctions(args):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Check JSON files in auctions folder')
-    parser.add_argument('--data_dir', type=str, default='data/tww/auctions/', help='Path to the auctions folder')
+    parser.add_argument('--data_dir', type=str, default='data/auctions/', help='Path to the auctions folder')
     parser.add_argument('--output_file', type=str, default='generated/timestamps.json', help='Path to the output file')
     args = parser.parse_args()
 

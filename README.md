@@ -191,7 +191,7 @@ Calculate first/last appearance for each auction:
 
 ```bash
 python scripts/data_processing/compute_timestamps.py \
-    --data_dir data/tww/auctions/ \
+    --data_dir data/auctions/ \
     --output generated/timestamps.json
 ```
 
@@ -201,7 +201,7 @@ Generate vocabulary mappings for categorical features:
 
 ```bash
 python scripts/data_processing/process_mappings.py \
-    --data_dir data/tww/auctions/ \
+    --data_dir data/auctions/ \
     --output_dir generated/mappings/
 ```
 
@@ -217,7 +217,7 @@ Convert raw JSON to optimized HDF5 format:
 
 ```bash
 python scripts/data_processing/prepare_sequence_data.py \
-    --data_dir data/tww/auctions/ \
+    --data_dir data/auctions/ \
     --timestamps generated/timestamps.json \
     --mappings_dir generated/mappings/ \
     --output_dir generated/
@@ -427,7 +427,7 @@ auction_classic/
 
 | Path | Description |
 |------|-------------|
-| `data/tww/auctions/` | Raw auction JSON files |
+| `data/auctions/` | Raw auction JSON files |
 | `generated/` | Processed data and model artifacts |
 | `generated/mappings/` | Vocabulary mapping files |
 | `models/` | Trained model checkpoints |

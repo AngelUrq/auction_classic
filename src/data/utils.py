@@ -52,6 +52,8 @@ def collate_auctions(batch, max_sequence_length=None, pad_value=0):
     hour_of_week     = _crop_and_pad([b['hour_of_week']       for b in batch], L, pad_value)
     snapshot_offset  = _crop_and_pad([b['snapshot_offset']    for b in batch], L, pad_value)
     listing_duration = _crop_and_pad([b['listing_duration']   for b in batch], L, pad_value)
+    is_expired       = _crop_and_pad([b['is_expired']         for b in batch], L, pad_value)
+    sold             = _crop_and_pad([b['sold']               for b in batch], L, pad_value)
 
     return {
         'auction_features': auction_features,    # (B, T_max, 5)
@@ -65,6 +67,8 @@ def collate_auctions(batch, max_sequence_length=None, pad_value=0):
         'hour_of_week': hour_of_week,
         'snapshot_offset': snapshot_offset,
         'listing_duration': listing_duration,
+        'is_expired': is_expired,
+        'sold': sold,
     }
 
 

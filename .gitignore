@@ -9,7 +9,7 @@ __pycache__/
 *.pkl
 *.xlsx
 
-data/tww/
+data/auctions/
 notebooks/wandb/
 .gradio/
 wandb/

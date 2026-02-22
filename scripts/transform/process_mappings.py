@@ -92,7 +92,7 @@ def process_mappings(args):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Generate mapping files from auction data')
-    parser.add_argument('--data_dir', type=str, default='data/tww/auctions/', help='Path to the auctions folder')
+    parser.add_argument('--data_dir', type=str, default='data/auctions/', help='Path to the auctions folder')
     parser.add_argument('--output_dir', type=str, default='generated/mappings/', help='Path to output the mapping files')
     args = parser.parse_args()
 

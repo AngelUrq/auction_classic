@@ -34,7 +34,7 @@ def collect_files(base: Path) -> list[Path]:
 
 def main():
     parser = argparse.ArgumentParser(description="Check for duplicate auction JSON files.")
-    parser.add_argument("--data_dir", type=str, default="data/tww/auctions/", help="Path to the auctions folder")
+    parser.add_argument("--data_dir", type=str, default="data/auctions/", help="Path to the auctions folder")
     args = parser.parse_args()
 
     base = Path(args.data_dir)

@@ -82,7 +82,7 @@ def format_size(n_bytes: int) -> str:
 
 def main():
     parser = argparse.ArgumentParser(description="Validate auctions data directory integrity.")
-    parser.add_argument("--data_dir", type=str, default="data/tww/auctions/", help="Path to the auctions folder")
+    parser.add_argument("--data_dir", type=str, default="data/auctions/", help="Path to the auctions folder")
     args = parser.parse_args()
 
     base = Path(args.data_dir)

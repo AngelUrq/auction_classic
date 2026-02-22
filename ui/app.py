@@ -38,7 +38,7 @@ def load_data_and_model():
         return
 
     base_path = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    data_path = os.path.join(base_path, "data/tww/auctions/")
+    data_path = os.path.join(base_path, "data/auctions/")
 
     # Run sync_auctions script on startup
     script_path = os.path.join(base_path, "scripts", "data_collection", "sync_auctions.sh")

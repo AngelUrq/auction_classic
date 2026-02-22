@@ -30,7 +30,7 @@ def compute_auction_hours(timestamps):
     df['first_appearance'] = pd.to_datetime(df['first_appearance'])
     df['last_appearance'] = pd.to_datetime(df['last_appearance'])
 
-    df = df[df['listing_duration'] <= 50]
+    df = df[df['listing_duration'] <= 47]
 
     return df
 

@@ -38,12 +38,14 @@ class AuctionDataset(Dataset):
             "time_left": 3,
             "listing_age": 4,
             "buyout_rank": 5,
-            "listing_duration": 6,
+            "is_expired": 6,
+            "sold": 7,
+            "listing_duration": 8,
         }
 
         data_mm = np.memmap(os.path.join(root, "data.npy"), mode="r", dtype=np.float32)
-        total_rows = data_mm.size // 7
-        self.data = data_mm.reshape((total_rows, 7))
+        total_rows = data_mm.size // 9
+        self.data = data_mm.reshape((total_rows, 9))
 
         self.contexts = np.memmap(
             os.path.join(root, "contexts.npy"), mode="r", dtype=np.int32
@@ -149,6 +151,11 @@ class AuctionDataset(Dataset):
         )
 
         y = listing_duration
+        is_expired_arr = auction_features_np[:, self.column_map["is_expired"]]
+        is_expired_tensor = torch.tensor(is_expired_arr, dtype=torch.float32)
+        
+        sold_arr = auction_features_np[:, self.column_map["sold"]]
+        sold_tensor = torch.tensor(sold_arr, dtype=torch.float32)
 
         return {
             "auction_features": auction_features,
@@ -162,4 +169,6 @@ class AuctionDataset(Dataset):
             "listing_age": listing_age,
             "time_left": time_left,
             "listing_duration": y,
+            "is_expired": is_expired_tensor,
+            "sold": sold_tensor,
         }

@@ -16,6 +16,7 @@ TIME_LEFT_TO_INT = {
     'SHORT': 0.5,
 }
 
+EXPIRED_LISTING_DURATIONS = [11.0, 23.0, 47.0]
 MAX_BONUSES = 9
 MAX_MODIFIERS = 11
 MAX_SEQUENCE_LENGTH = 1024
@@ -24,9 +25,15 @@ ROW_CHUNK = 1024
 # We exclude the first times of these days because their data is not complete.
 # listing_age is not available for these days as you need to wait 48 hours to get it.
 # We also exclude the last days because if you publish an auction in the last day, you can't get the listing_duration.
-exclude_first_times = ['20-12-2025', '21-12-2025','22-12-2025', '10-01-2026', '11-01-2026', '12-01-2026']
+exclude_first_times = ['20-12-2025', '21-12-2025','22-12-2025', '19-02-2026', '20-02-2026', '21-02-2026']
 last_exclude_date = datetime.strptime(exclude_first_times[-1], '%d-%m-%Y')
 
+
+def is_expired(listing_duration, time_left):
+    return 1.0 if (float(listing_duration) in EXPIRED_LISTING_DURATIONS and float(time_left) <= 0.5) else 0.0
+
+def is_sold(buyout_rank, is_expired_val):
+    return 1.0 if (float(buyout_rank) == 0.0 and float(is_expired_val) == 0.0) else 0.0
 
 def pad_or_truncate_bonuses(bonus_ids, bonus_to_idx):
     mapped = [int(bonus_to_idx[str(b)]) for b in bonus_ids][:MAX_BONUSES]
@@ -53,7 +60,7 @@ def _check_item_datasets(h5_file, item_id_str):
     grp = grp_root.require_group(item_id_str)
 
     if 'data' not in grp:
-        grp.create_dataset('data', shape=(0, 7), maxshape=(None, 7), dtype='float32', chunks=(ROW_CHUNK, 7))
+        grp.create_dataset('data', shape=(0, 9), maxshape=(None, 9), dtype='float32', chunks=(ROW_CHUNK, 9))
     if 'contexts' not in grp:
         grp.create_dataset('contexts', shape=(0,), maxshape=(None,), dtype='int32', chunks=(ROW_CHUNK,))
     if 'bonus_ids' not in grp:
@@ -71,7 +78,7 @@ def _append_item_block(grp, data_h, contexts_h, bonus_ids_h, modifier_types_h, m
     old = grp['data'].shape[0]
     new = old + n
 
-    grp['data'].resize((new, 7))
+    grp['data'].resize((new, 9))
     grp['contexts'].resize((new,))
     grp['bonus_ids'].resize((new, MAX_BONUSES))
     grp['modifier_types'].resize((new, MAX_MODIFIERS))
@@ -172,9 +179,13 @@ def process_auctions(args):
                 first_appearance = datetime.strptime(timestamps[auction_id]['first_appearance'], '%Y-%m-%d %H:%M:%S')
                 last_appearance  = datetime.strptime(timestamps[auction_id]['last_appearance'],  '%Y-%m-%d %H:%M:%S')
                 listing_age = (prediction_time - first_appearance).total_seconds() / 3600.0
-                listing_duration = (last_appearance - prediction_time).total_seconds() / 3600.0
+                listing_duration = min(int((last_appearance - first_appearance).total_seconds() / 3600), 47)
+                
+                last_time_left_str = timestamps[auction_id]['last_time_left']
+                final_time_left_val = float(TIME_LEFT_TO_INT[last_time_left_str])
+                is_expired_val = is_expired(listing_duration, final_time_left_val)
 
-                row_data = np.array([bid, buyout, quantity, time_left, listing_age, listing_duration], dtype=np.float32)
+                row_data = np.array([bid, buyout, quantity, time_left, listing_age, is_expired_val, listing_duration], dtype=np.float32)
 
                 if item_index not in auctions_by_item:
                     auctions_by_item[item_index] = {
@@ -206,9 +217,19 @@ def process_auctions(args):
                 buyout_col = data_h[:, 1]
                 unique_sorted = np.sort(np.unique(buyout_col))
                 buyout_rank = np.searchsorted(unique_sorted, buyout_col).astype(np.float32)
-                data_h = np.column_stack([data_h[:, :5], buyout_rank, data_h[:, 5]])  # (N, 7)
+                
+                # To calculate sold securely we need the buyout_rank matching 0.
+                data_h = np.column_stack([data_h[:, :5], buyout_rank, data_h[:, 5:]])  # (N, 8)
+                
+                # data_h layout is now: 
+                # [0: bid, 1: buyout, 2: quantity, 3: time_left, 4: listing_age, 5: buyout_rank, 6: is_expired, 7: listing_duration]
 
-                item_listing_duration = data_h[:, 6]
+                sold_col = np.array([is_sold(rank, exp) for rank, exp in zip(data_h[:, 5], data_h[:, 6])], dtype=np.float32)
+                
+                # insert sold before listing_duration to keep target at the end
+                data_h = np.column_stack([data_h[:, :7], sold_col, data_h[:, 7:]]) # (N, 9)
+
+                item_listing_duration = data_h[:, 8]
                 item_listing_age = data_h[:, 4]
                 stats_tuple = (
                     int(len(item_listing_duration)),
@@ -287,7 +308,7 @@ def process_auctions(args):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Per-item HDF5 writer with 24h batching + indices CSV→Parquet')
-    parser.add_argument('--data_dir', type=str, default='data/tww/auctions/')
+    parser.add_argument('--data_dir', type=str, default='data/auctions/')
     parser.add_argument('--timestamps', type=str, default='generated/timestamps.json')
     parser.add_argument('--output_dir', type=str, default='generated')
     parser.add_argument('--mappings_dir', type=str, default='generated/mappings/')

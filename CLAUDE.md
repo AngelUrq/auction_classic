@@ -32,9 +32,9 @@ cd ui && python app.py
 
 **Data pipeline** (or just run `bash scripts/prepare_data.sh`):
 ```bash
-python scripts/transform/compute_timestamps.py --data_dir data/tww/auctions/ --output_file generated/timestamps.json
-python scripts/transform/process_mappings.py --data_dir data/tww/auctions/ --output_dir generated/mappings/
-python scripts/transform/prepare_sequence_data.py --data_dir data/tww/auctions/ --timestamps generated/timestamps.json --mappings_dir generated/mappings/ --output_dir generated/
+python scripts/transform/compute_timestamps.py --data_dir data/auctions/ --output_file generated/timestamps.json
+python scripts/transform/process_mappings.py --data_dir data/auctions/ --output_dir generated/mappings/
+python scripts/transform/prepare_sequence_data.py --data_dir data/auctions/ --timestamps generated/timestamps.json --mappings_dir generated/mappings/ --output_dir generated/
 python scripts/transform/convert_hdf5_to_npy.py --h5_path generated/sequences.h5 --indices_path generated/indices.parquet --output_dir generated/memmap/
 python scripts/transform/compute_feature_stats.py --indices_path generated/indices.parquet --memmap_dir generated/memmap/
 ```
@@ -54,7 +54,7 @@ python scripts/analyze/benchmark_dataloader.py
 
 ### Data Flow
 ```
-[Blizzard API hourly cron] → data/tww/auctions/YYYY/MM/DD/HHZ.json
+[Blizzard API hourly cron] → data/auctions/YYYY/MM/DD/HHZ.json
     → compute_timestamps.py  → generated/timestamps.json
     → process_mappings.py    → generated/mappings/{item,context,bonus,modtype}_to_idx.json
     → prepare_sequence_data.py → generated/sequences.h5 + generated/indices.parquet
@@ -120,3 +120,8 @@ Key tunable parameters:
 
 ### RL Component
 `src/rl/auction_env.py`: Gymnasium-compatible environment for simulated trading experiments.
+
+## Code Style
+
+- Every test function must have a docstring explaining what behaviour it verifies.
+- Helper function names must be descriptive actions: prefer `_make_X`, `_build_X`, `_write_X` over abbreviations (`_pa_args`, `_pm_args`) or vague nouns (`_simple_dataset`, `_setup_X`).

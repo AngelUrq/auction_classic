@@ -57,7 +57,7 @@ def main():
         os.path.join(output_dir, "data.npy"),
         mode="w+",
         dtype=np.float32,
-        shape=(TOTAL_ROWS, 7),
+        shape=(TOTAL_ROWS, 9),
     )
     contexts_mm = np.memmap(
         os.path.join(output_dir, "contexts.npy"),
