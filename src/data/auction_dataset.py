@@ -39,7 +39,7 @@ class AuctionDataset(Dataset):
             "listing_age": 4,
             "buyout_rank": 5,
             "is_expired": 6,
-            "sold": 7,
+            "is_sold": 7,
             "listing_duration": 8,
         }
 
@@ -123,7 +123,8 @@ class AuctionDataset(Dataset):
         hour_of_week = torch.tensor(hour_of_week_np, dtype=torch.int32)
         snapshot_offset = torch.tensor(snapshot_offset_np, dtype=torch.int32)
 
-        listing_duration = auction_features[:, self.column_map["listing_duration"]]  # col 6
+        listing_duration = auction_features[:, self.column_map["listing_duration"]]
+        buyout_rank = auction_features[:, self.column_map["buyout_rank"]].long()
         auction_features = auction_features[:, :5]  # bid, buyout, qty, time_left, listing_age
 
         auction_features[:, self.column_map["bid"]] = torch.log1p(
@@ -154,8 +155,8 @@ class AuctionDataset(Dataset):
         is_expired_arr = auction_features_np[:, self.column_map["is_expired"]]
         is_expired_tensor = torch.tensor(is_expired_arr, dtype=torch.float32)
         
-        sold_arr = auction_features_np[:, self.column_map["sold"]]
-        sold_tensor = torch.tensor(sold_arr, dtype=torch.float32)
+        is_sold_arr = auction_features_np[:, self.column_map["is_sold"]]
+        is_sold_tensor = torch.tensor(is_sold_arr, dtype=torch.float32)
 
         return {
             "auction_features": auction_features,
@@ -164,11 +165,12 @@ class AuctionDataset(Dataset):
             "bonus_ids": bonus_ids,
             "modifier_types": modifier_types,
             "modifier_values": modifier_values,
+            "buyout_rank": buyout_rank,
             "hour_of_week": hour_of_week,
             "snapshot_offset": snapshot_offset,
             "listing_age": listing_age,
             "time_left": time_left,
             "listing_duration": y,
             "is_expired": is_expired_tensor,
-            "sold": sold_tensor,
+            "is_sold": is_sold_tensor,
         }

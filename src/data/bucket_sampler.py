@@ -139,8 +139,9 @@ def get_lengths(
     Returns:
         Array of sequence lengths for each sample
     """
-    cache_path = os.path.join(cache_dir, f"bucket_lengths_{split}_{max_hours_back}.npy")
-    
+    cache_subdir = os.path.join(cache_dir, "cache")
+    cache_path = os.path.join(cache_subdir, f"bucket_lengths_{split}_{max_hours_back}.npy")
+
     if os.path.exists(cache_path):
         lengths = np.load(cache_path)
         if len(lengths) == len(pairs_df):
@@ -148,11 +149,11 @@ def get_lengths(
             return lengths
         else:
             logger.info(f"Cache size mismatch ({len(lengths)} vs {len(pairs_df)}), recomputing...")
-    
+
     logger.info(f"Computing sequence lengths for max_hours_back={max_hours_back}...")
     lengths = compute_sequence_lengths(pairs_df, idx_map, max_hours_back)
-    
-    os.makedirs(cache_dir, exist_ok=True)
+
+    os.makedirs(cache_subdir, exist_ok=True)
     np.save(cache_path, lengths)
     logger.info(f"Saved lengths to {cache_path}")
     

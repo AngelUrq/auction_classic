@@ -7,6 +7,8 @@ import wandb
 import pandas as pd
 from pathlib import Path
 
+torch.set_float32_matmul_precision('high')
+
 class AuctionTransformer(L.LightningModule):
     def __init__(
         self,
@@ -22,8 +24,8 @@ class AuctionTransformer(L.LightningModule):
         num_layers: int = 4,
         dropout_p: float = 0.1,
         learning_rate: float = 1e-4,
+        n_buyout_ranks: int = 64,
         quantiles: list[float] = [0.1, 0.5, 0.9],
-        classification_threshold_hours: float = 8.0,
         classification_loss_weight: float = 1.0,
         logging_interval: int = 1000,
         log_raw_batch_data: bool = False,
@@ -54,6 +56,7 @@ class AuctionTransformer(L.LightningModule):
         self.context_embeddings = nn.Embedding(n_contexts, embedding_dim)
         self.bonus_embeddings = nn.Embedding(n_bonuses, embedding_dim)
         self.modifier_embeddings = nn.Embedding(n_modtypes, embedding_dim)
+        self.buyout_rank_embeddings = nn.Embedding(n_buyout_ranks, embedding_dim)
         self.hour_of_week_embeddings = nn.Embedding(24 * 7, embedding_dim)
         self.snapshot_offset_embeddings = nn.Embedding(max_hours_back + 1, embedding_dim)
 
@@ -100,17 +103,17 @@ class AuctionTransformer(L.LightningModule):
         self.log_step_predictions = log_step_predictions
         self.quantiles = quantiles
         self.use_lr_scheduler = use_lr_scheduler
-        self.classification_threshold_hours = classification_threshold_hours
         self.classification_loss_weight = classification_loss_weight
 
     def forward(self, X):
-        (auction_features, item_index, contexts, bonus_ids, modifier_types, modifier_values, hour_of_week, snapshot_offset) = X
+        (auction_features, item_index, contexts, bonus_ids, modifier_types, modifier_values, buyout_rank, hour_of_week, snapshot_offset) = X
 
         # Base embeddings
         item_embeddings = self.item_embeddings(item_index.long())                      # (B,S,D)
         context_embeddings = self.context_embeddings(contexts.long())                  # (B,S,D)
         bonus_embeddings_full = self.bonus_embeddings(bonus_ids.long())                # (B,S,K,D)
         modifier_type_embeddings = self.modifier_embeddings(modifier_types.long())     # (B,S,M,D)
+        buyout_rank_embeddings = self.buyout_rank_embeddings(buyout_rank.clamp(0, self.hparams.n_buyout_ranks - 1).long()) # (B,S,D)
         hour_of_week_embeddings = self.hour_of_week_embeddings(hour_of_week.long())    # (B,S,D)
         snapshot_offset_embeddings = self.snapshot_offset_embeddings(snapshot_offset.long())  # (B,S,D)
 
@@ -172,6 +175,7 @@ class AuctionTransformer(L.LightningModule):
             + context_embeddings
             + bonus_embeddings_pooled
             + modifier_embeddings_pooled
+            + buyout_rank_embeddings
             + hour_of_week_embeddings
             + snapshot_offset_embeddings
         )                                                                              # (B,S,D)
@@ -188,19 +192,18 @@ class AuctionTransformer(L.LightningModule):
 
         return regression_output, classification_output
 
-    def _compute_classification_loss_and_metrics(self, y_hat_classification, y, loss_mask):
+    def _compute_classification_loss_and_metrics(self, y_hat_classification, is_sold, loss_mask):
         """Compute binary classification loss and metrics.
 
         Args:
             y_hat_classification: Classification logits (B, S, 1)
-            y: Target durations in hours (B, S)
+            is_sold: Target binary variable indicating 1 if sold, 0 if not (B, S)
             loss_mask: Mask for valid items (B, S, 1)
 
         Returns:
             Dictionary with keys: loss, accuracy, precision, recall, f1
         """
-        # Create binary labels: 1 if item lasts < threshold hours, 0 otherwise
-        labels = (y < self.classification_threshold_hours).float().unsqueeze(-1)  # (B, S, 1)
+        labels = is_sold.float().unsqueeze(-1)  # (B, S, 1)
 
         # Compute binary cross-entropy loss
         classification_loss = nn.functional.binary_cross_entropy_with_logits(
@@ -245,12 +248,13 @@ class AuctionTransformer(L.LightningModule):
         }
 
 
-    def _compute_loss_and_metrics(self, y_hat_regression, y_hat_classification, y, item_index, listing_age, time_left, snapshot_offset):
+    def _compute_loss_and_metrics(self, y_hat_regression, y_hat_classification, y, is_sold, item_index, listing_age, time_left, snapshot_offset):
         """Compute loss and metrics for both training and validation.
 
         Args:
             y_hat_regression: Quantile predictions (B, S, Q)
             y_hat_classification: Classification logits (B, S, 1)
+            is_sold: Sold status target boolean variable (B, S)
 
         Returns:
             Dictionary with keys: total_loss, pinball_loss, classification_loss, general_mae,
@@ -280,7 +284,7 @@ class AuctionTransformer(L.LightningModule):
 
         # ----- Classification loss and metrics -----
         cls_metrics = self._compute_classification_loss_and_metrics(
-            y_hat_classification, y, loss_mask
+            y_hat_classification, is_sold, loss_mask
         )
 
         # ----- Combine losses -----
@@ -422,12 +426,13 @@ class AuctionTransformer(L.LightningModule):
             batch['bonus_ids'],
             batch['modifier_types'],
             batch['modifier_values'],
+            batch['buyout_rank'],
             batch['hour_of_week'],
             batch['snapshot_offset'],
         ))
 
         metrics = self._compute_loss_and_metrics(
-            y_hat_regression, y_hat_classification, batch['listing_duration'], batch['item_index'], batch['listing_age'], batch['time_left'], batch['snapshot_offset']
+            y_hat_regression, y_hat_classification, batch['listing_duration'], batch['is_sold'], batch['item_index'], batch['listing_age'], batch['time_left'], batch['snapshot_offset']
         )
 
         self._log_metrics('train', metrics['total_loss'], metrics['general_mae'], metrics['recent_listings_mae'], metrics['new_listings_mae'])
@@ -460,12 +465,13 @@ class AuctionTransformer(L.LightningModule):
             batch['bonus_ids'],
             batch['modifier_types'],
             batch['modifier_values'],
+            batch['buyout_rank'],
             batch['hour_of_week'],
             batch['snapshot_offset'],
         ))
 
         metrics = self._compute_loss_and_metrics(
-            y_hat_regression, y_hat_classification, batch['listing_duration'], batch['item_index'], batch['listing_age'], batch['time_left'], batch['snapshot_offset']
+            y_hat_regression, y_hat_classification, batch['listing_duration'], batch['is_sold'], batch['item_index'], batch['listing_age'], batch['time_left'], batch['snapshot_offset']
         )
 
         self._log_metrics('val', metrics['total_loss'], metrics['general_mae'], metrics['recent_listings_mae'], metrics['new_listings_mae'])
@@ -537,13 +543,13 @@ class AuctionTransformer(L.LightningModule):
         batch_dir = Path(f"../generated/logs/{step_type}/raw_batch_data")
         batch_dir.mkdir(parents=True, exist_ok=True)
 
-        auction_features = batch['auction_features']
+        auctions = batch['auction_features']
         targets = batch['listing_duration'].detach().cpu().float()
         validity_mask = mask.detach().cpu().float()
-        batch_size, seq_length, n_features = auction_features.shape
+        batch_size, seq_length, n_features = auctions.shape
 
         for batch_item in range(batch_size):
-            sequence_features = auction_features[batch_item].detach().cpu().float()
+            sequence_features = auctions[batch_item].detach().cpu().float()
             sequence_target = targets[batch_item].detach().cpu().float()
             # Extract all quantile predictions
             q10_predictions = y_hat_regression[batch_item, :, 0].detach().cpu().float()  # 0.1 quantile

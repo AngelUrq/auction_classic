@@ -125,3 +125,5 @@ Key tunable parameters:
 
 - Every test function must have a docstring explaining what behaviour it verifies.
 - Helper function names must be descriptive actions: prefer `_make_X`, `_build_X`, `_write_X` over abbreviations (`_pa_args`, `_pm_args`) or vague nouns (`_simple_dataset`, `_setup_X`).
+- Variable and attribute names must use full, descriptive words — never abbreviate (e.g. `_val_survival_curves` not `_val_surv_funcs`).
+- Keep step methods (`training_step`, `validation_step`, etc.) concise: extract logic into well-named private helpers (`_compute_X`, `_build_X`, `_accumulate_X`, `_clear_X`) rather than inlining multi-step operations.

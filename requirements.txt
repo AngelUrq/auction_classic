@@ -8,3 +8,5 @@ torch_tb_profiler
 h5py
 pyarrow
 omegaconf
+pycox
+scikit-survival
