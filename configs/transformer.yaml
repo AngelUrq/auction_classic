@@ -1,19 +1,19 @@
 # Auction Transformer Training Configuration
 data:
   dir: generated
-  date_start: "2025-12-20"
-  date_end: "2026-01-10"
+  date_start: "2025-12-25"
+  date_end: "2026-02-15"
   train_split: 0.95
   train_fraction: 0.90
-  max_hours_back: 72
-  max_sequence_length: 4096
+  max_hours_back: 24
+  max_sequence_length: 1024
   bucket_sampling: true  # Group similar-length sequences to reduce padding waste
   num_buckets: 20        # Number of length buckets (only used if bucket_sampling=true)
   prefetch_factor: 8
 
 training:
   num_epochs: 1
-  batch_size: 64
+  batch_size: 16
   learning_rate: 1e-4
   use_lr_scheduler: true
   gradient_clip: 3.0
@@ -26,8 +26,8 @@ training:
   num_workers: 8
 
 model:
-  pretrained_path: ./models/transformer-4.2M-quantile-historical_72-lr1e-04-bs64/epoch_epoch=00-v3.ckpt
-  reset_embeddings: true
+  pretrained_path: null
+  reset_embeddings: false
   input_size: 5
   embedding_dim: 32
   d_model: 64
@@ -35,9 +35,12 @@ model:
   nhead: 4
   num_layers: 4
   dropout: 0.0
+  n_buyout_ranks: 64
+  n_time_bins: 48
   quantiles: [0.1, 0.5, 0.9]
-  classification_threshold_hours: 8.0
-  classification_loss_weight: 1.0
+  classification_loss_weight: 0.1
+  deephit_nll_weight: 1.0       # pycox alpha: loss = nll_weight * NLL + (1 - nll_weight) * rank_loss
+  deephit_ranking_sigma: 0.1   # kernel bandwidth for ranking loss (pycox sigma)
 
 hardware:
   accelerator: auto

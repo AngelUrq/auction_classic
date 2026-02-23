@@ -226,10 +226,10 @@ def create_model(mappings: dict, cfg: DictConfig) -> tuple[AuctionTransformer, i
         learning_rate=float(cfg.training.learning_rate),
         logging_interval=int(cfg.training.logging_interval),
         use_lr_scheduler=bool(cfg.training.use_lr_scheduler),
-        quantiles=list(cfg.model.quantiles),
+        quantiles=cfg.model.quantiles,
+        n_buyout_ranks=int(cfg.model.n_buyout_ranks),
+        classification_loss_weight=float(cfg.model.classification_loss_weight),
         max_hours_back=int(cfg.data.max_hours_back),
-        log_raw_batch_data=False,
-        log_step_predictions=False,
     )
 
     param_count = sum(p.numel() for p in model.parameters())
@@ -249,7 +249,7 @@ def generate_run_name(param_count: int, max_hours_back: int, learning_rate: floa
     """Generate run name based on parameters and config."""
     param_str = format_param_count(param_count)
     lr_str = format_learning_rate(learning_rate)
-    return f"transformer-{param_str}-quantile-historical_{max_hours_back}-lr{lr_str}-bs{batch_size}"
+    return f"transformer-{param_str}-quantile_{max_hours_back}-lr{lr_str}-bs{batch_size}"
 
 
 def load_config(config_path: Path) -> DictConfig:

@@ -18,7 +18,7 @@ def predict_dataframe(model, df_auctions, prediction_time, feature_stats, max_ho
     df_out["prediction_q10"] = np.nan
     df_out["prediction_q50"] = np.nan
     df_out["prediction_q90"] = np.nan
-    df_out["is_short_duration"] = np.nan
+    df_out["is_sold"] = np.nan
 
     for auction_id, df_item in grouped.items():
         # Keep the most recent entries (snapshot_offset closer to 0) and maintain
@@ -61,6 +61,13 @@ def predict_dataframe(model, df_auctions, prediction_time, feature_stats, max_ho
         modifier_values = torch.log1p(modifier_values)
         modifier_values = (modifier_values - feature_stats["modifiers_mean"].to(model.device)) / (feature_stats["modifiers_std"].to(model.device) + 1e-6)
 
+        n_buyout_ranks = model.hparams.n_buyout_ranks
+
+        buyout_rank_np = np.clip(
+            df_item["buyout_rank"].to_numpy(dtype=np.int64), 0, n_buyout_ranks - 1
+        )
+        buyout_rank = torch.tensor(buyout_rank_np, dtype=torch.long, device=model.device)
+
         hour_of_week = torch.tensor(df_item["hour_of_week"].to_numpy(), dtype=torch.long, device=model.device)
         snapshot_offset = torch.tensor(
             np.clip(df_item["snapshot_offset"].to_numpy(), 0, max_hours_back),
@@ -75,6 +82,7 @@ def predict_dataframe(model, df_auctions, prediction_time, feature_stats, max_ho
             bonus_ids.unsqueeze(0),
             modifier_types.unsqueeze(0),
             modifier_values.unsqueeze(0),
+            buyout_rank.unsqueeze(0),
             hour_of_week.unsqueeze(0),
             snapshot_offset.unsqueeze(0),
         )
@@ -84,17 +92,15 @@ def predict_dataframe(model, df_auctions, prediction_time, feature_stats, max_ho
         mask_now = (df_item["snapshot_offset"].to_numpy() == 0)
         if mask_now.any():
             q = y_pred_quantiles.detach().cpu().numpy()
-            # Apply sigmoid to classification logits to get probability of short duration
+            # Apply sigmoid to classification logits to get probability of item being sold
             c = torch.sigmoid(y_pred_classification).detach().cpu().numpy()
             idx_now = df_item.index[mask_now]
             df_out.loc[idx_now, "prediction_q10"] = q[0, mask_now, 0]
             df_out.loc[idx_now, "prediction_q50"] = q[0, mask_now, 1]
             df_out.loc[idx_now, "prediction_q90"] = q[0, mask_now, 2]
-            df_out.loc[idx_now, "is_short_duration"] = c[0, mask_now, 0]
+            df_out.loc[idx_now, "is_sold"] = c[0, mask_now, 0]
 
-            listing_age_now = df_item.loc[mask_now, "listing_age"].to_numpy(dtype=np.float32)
-
-    for col in ["buyout","bid","time_left","listing_age","prediction_q10","prediction_q50","prediction_q90","is_short_duration"]:
+    for col in ["buyout","bid","time_left","listing_age","prediction_q10","prediction_q50","prediction_q90","is_sold"]:
         if col in df_out.columns:
             df_out[col] = np.round(df_out[col].astype(float), 2)
 

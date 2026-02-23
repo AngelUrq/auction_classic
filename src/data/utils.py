@@ -47,13 +47,14 @@ def collate_auctions(batch, max_sequence_length=None, pad_value=0):
     bonus_ids        = _crop_and_pad([b['bonus_ids']          for b in batch], L, pad_value)
     modifier_types   = _crop_and_pad([b['modifier_types']     for b in batch], L, pad_value)
     modifier_values  = _crop_and_pad([b['modifier_values']    for b in batch], L, pad_value)
+    buyout_rank      = _crop_and_pad([b['buyout_rank']        for b in batch], L, pad_value)
     listing_age      = _crop_and_pad([b['listing_age']        for b in batch], L, pad_value)
     time_left        = _crop_and_pad([b['time_left']          for b in batch], L, pad_value)
     hour_of_week     = _crop_and_pad([b['hour_of_week']       for b in batch], L, pad_value)
     snapshot_offset  = _crop_and_pad([b['snapshot_offset']    for b in batch], L, pad_value)
     listing_duration = _crop_and_pad([b['listing_duration']   for b in batch], L, pad_value)
     is_expired       = _crop_and_pad([b['is_expired']         for b in batch], L, pad_value)
-    sold             = _crop_and_pad([b['sold']               for b in batch], L, pad_value)
+    is_sold             = _crop_and_pad([b['is_sold']               for b in batch], L, pad_value)
 
     return {
         'auction_features': auction_features,    # (B, T_max, 5)
@@ -62,13 +63,14 @@ def collate_auctions(batch, max_sequence_length=None, pad_value=0):
         'bonus_ids': bonus_ids,
         'modifier_types': modifier_types,
         'modifier_values': modifier_values,
+        'buyout_rank': buyout_rank,
         'listing_age': listing_age,
         'time_left': time_left,
         'hour_of_week': hour_of_week,
         'snapshot_offset': snapshot_offset,
         'listing_duration': listing_duration,
         'is_expired': is_expired,
-        'sold': sold,
+        'is_sold': is_sold,
     }
 
 
