@@ -206,11 +206,12 @@ class AuctionTransformer(L.LightningModule):
         labels = is_sold.float().unsqueeze(-1)  # (B, S, 1)
 
         # Compute binary cross-entropy loss
-        classification_loss = nn.functional.binary_cross_entropy_with_logits(
-            y_hat_classification * loss_mask,
-            labels * loss_mask,
-            reduction='sum'
-        ) / loss_mask.sum().clamp_min(1e-6)
+        bce_loss = nn.functional.binary_cross_entropy_with_logits(
+            y_hat_classification,
+            labels,
+            reduction='none'
+        )
+        classification_loss = (bce_loss * loss_mask).sum() / loss_mask.sum().clamp_min(1e-6)
 
         with torch.no_grad():
             # Get predictions (apply sigmoid and threshold at 0.5)
