@@ -87,6 +87,12 @@ def predict_dataframe(model, df_auctions, prediction_time, feature_stats, max_ho
             snapshot_offset.unsqueeze(0),
         )
 
+        for name, t in zip(
+            ["features", "item_indices", "contexts", "bonus_ids", "modifier_types", "modifier_values", "buyout_rank", "hour_of_week", "snapshot_offset"],
+            X
+        ):
+            assert not torch.isnan(t).any(), f"NaN found in tensor: {name}"
+
         y_pred_quantiles, y_pred_classification = model(X)
 
         mask_now = (df_item["snapshot_offset"].to_numpy() == 0)

@@ -24,9 +24,9 @@ model = None
 feature_stats = None
 prediction_time = None
 recommendations = None
-ckpt_path = './models/transformer-4.2M-quantile-historical_72-lr1e-05-bs64/last.ckpt'
-max_hours_back = 72
-max_sequence_length = 4096
+ckpt_path = './models/transformer-883.7K-quantile_24-lr1e-04-bs64/last-v1.ckpt'
+max_hours_back = 24
+max_sequence_length = 1024
 sold_threshold = 8
 
 
@@ -41,12 +41,13 @@ def load_data_and_model():
     data_path = os.path.join(base_path, "data/auctions/")
 
     # Run sync_auctions script on startup
-    script_path = os.path.join(base_path, "scripts", "data_collection", "sync_auctions.sh")
+    script_path = os.path.join(base_path, "scripts", "collect", "sync_auctions.sh")
     if os.path.exists(script_path):
         print(f"Running sync_auctions script at {script_path}")
         os.system(f"bash {script_path}")
     else:
         print(f"Error: Script not found at {script_path}")
+        raise FileNotFoundError(f"Script not found at {script_path}")
 
     time_left_mapping = {
         'VERY_LONG': 48,
@@ -57,7 +58,16 @@ def load_data_and_model():
 
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
-    prediction_time = datetime.now()
+    files = []
+    for root, _, fs in os.walk(data_path):
+        for fn in fs:
+            if fn.endswith('.json'):
+                try:
+                    dt = datetime.strptime(fn.split('.')[0], '%Y%m%dT%H')
+                    files.append(dt)
+                except Exception:
+                    continue
+    prediction_time = max(files) if files else datetime.now()
     print(f'Prediction time: {prediction_time}')
 
     mappings_dir = os.path.join(base_path, 'generated/mappings')
@@ -81,9 +91,7 @@ def load_data_and_model():
     model = AuctionTransformer.load_from_checkpoint(
         os.path.join(base_path, ckpt_path),
         map_location=device,
-        n_items=17955,
-        n_contexts=64,
-        n_bonuses=1405
+        weights_only=False
     )
 
     print(f'Number of model parameters: {sum(p.numel() for p in model.parameters())}')
@@ -184,7 +192,7 @@ def generate_recommendations(expected_profit, median_discount=0.75):
             "prediction_q10": float(pred_row["prediction_q10"]),
             "prediction_q50": float(pred_row["prediction_q50"]),
             "prediction_q90": float(pred_row["prediction_q90"]),
-            "is_short_duration": float(pred_row["is_short_duration"]),
+            "is_sold": float(pred_row["is_sold"]),
             "potential_profit": round(potential_profit, 2),
         })
         recommendations_list.append(recommendation)
@@ -277,9 +285,9 @@ def create_ui():
                 prediction_results = prediction_results[prediction_results['snapshot_offset'] == 0]
 
                 if prediction_results.empty:
-                    return pd.DataFrame(columns=['item_id', 'buyout', 'quantity', 'time_left', 'context', 'bonus_ids', 'modifier_types', 'modifier_values', 'listing_age', 'prediction_q10', 'prediction_q50', 'prediction_q90', 'is_short_duration'])
+                    return pd.DataFrame(columns=['item_id', 'buyout', 'quantity', 'time_left', 'context', 'bonus_ids', 'modifier_types', 'modifier_values', 'listing_age', 'prediction_q10', 'prediction_q50', 'prediction_q90', 'is_sold'])
 
-                display_columns_prediction = display_columns + ['prediction_q10', 'prediction_q50', 'prediction_q90', 'is_short_duration']
+                display_columns_prediction = display_columns + ['prediction_q10', 'prediction_q50', 'prediction_q90', 'is_sold']
                 return prediction_results[display_columns_prediction].head(100)
 
             def store_item_csv(item_id, _time_offset_value):
@@ -336,7 +344,7 @@ def create_ui():
             gr.Markdown("- **prediction_q10**: 10th percentile prediction (pessimistic - 90% chance it takes longer)")
             gr.Markdown("- **prediction_q50**: 50th percentile prediction (median)")
             gr.Markdown("- **prediction_q90**: 90th percentile prediction (optimistic - 90% chance it sells faster)")
-            gr.Markdown("- **is_short_duration**: Probability (0-1) that the item will sell in less than 8 hours")
+            gr.Markdown("- **is_sold**: Probability (0-1) that the item will sell")
             gr.Markdown(f"Items are considered likely to sell if prediction_q50 < {sold_threshold} hours")
 
             with gr.Row():
@@ -359,7 +367,7 @@ def create_ui():
             gr.Markdown("- **predicted_hours_q10**: 10th percentile (optimistic timing)")
             gr.Markdown("- **predicted_hours_q50**: 50th percentile (median hours to sale)")
             gr.Markdown("- **predicted_hours_q90**: 90th percentile (pessimistic timing)")
-            gr.Markdown("- **is_short_duration**: Probability (0-1) that the item will sell in less than 8 hours")
+            gr.Markdown("- **is_sold**: Probability (0-1) that the item will sell")
 
             with gr.Row():
                 flip_item_search = gr.Textbox(label="Search by Item ID", placeholder="Enter item ID...")
@@ -469,7 +477,7 @@ def create_ui():
                     'predicted_hours_q10': flip_prediction['prediction_q10'],
                     'predicted_hours_q50': flip_prediction['prediction_q50'],
                     'predicted_hours_q90': flip_prediction['prediction_q90'],
-                    'is_short_duration': flip_prediction['is_short_duration']
+                    'is_sold': flip_prediction['is_sold']
                 }])
 
                 return result

@@ -258,6 +258,7 @@ def load_auctions_from_sample(
 
     if not df_auctions.empty:
         df_auctions = df_auctions.sort_values(['snapshot_time', 'item_index', 'id']).reset_index(drop=True)
+        df_auctions['buyout_rank'] = df_auctions.groupby(['snapshot_time', 'item_index'])['buyout'].rank(method='dense').astype(int) - 1
 
     print(
         f'Built dataframe with {len(df_auctions)} rows from {len(file_info)} snapshots '

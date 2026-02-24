@@ -13,8 +13,8 @@ data:
 
 training:
   num_epochs: 1
-  batch_size: 16
-  learning_rate: 1e-4
+  batch_size: 64
+  learning_rate: 1e-5
   use_lr_scheduler: true
   gradient_clip: 3.0
   precision: bf16
@@ -38,7 +38,7 @@ model:
   n_buyout_ranks: 64
   n_time_bins: 48
   quantiles: [0.1, 0.5, 0.9]
-  classification_loss_weight: 0.1
+  classification_loss_weight: 70
   deephit_nll_weight: 1.0       # pycox alpha: loss = nll_weight * NLL + (1 - nll_weight) * rank_loss
   deephit_ranking_sigma: 0.1   # kernel bandwidth for ranking loss (pycox sigma)
 
