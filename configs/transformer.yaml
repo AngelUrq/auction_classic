@@ -5,7 +5,7 @@ data:
   date_end: "2026-02-15"
   train_split: 0.95
   train_fraction: 0.90
-  max_hours_back: 24
+  max_hours_back: 0
   max_sequence_length: 1024
   bucket_sampling: true  # Group similar-length sequences to reduce padding waste
   num_buckets: 20        # Number of length buckets (only used if bucket_sampling=true)
@@ -38,7 +38,9 @@ model:
   n_buyout_ranks: 64
   n_time_bins: 48
   quantiles: [0.1, 0.5, 0.9]
+  pinball_loss_weight: 1.0
   classification_loss_weight: 70
+  classification_pos_weight: 3.427
   deephit_nll_weight: 1.0       # pycox alpha: loss = nll_weight * NLL + (1 - nll_weight) * rank_loss
   deephit_ranking_sigma: 0.1   # kernel bandwidth for ranking loss (pycox sigma)
 

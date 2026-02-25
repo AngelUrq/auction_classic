@@ -176,6 +176,7 @@ def process_auctions(args):
                 bonus_arr = pad_or_truncate_bonuses(auction['item'].get('bonus_lists', []), bonus_to_idx)
                 modifier_types, modifier_values = pad_or_truncate_modifiers(auction['item'].get('modifiers', []), modtype_to_idx)
 
+                # Global tracking values from timestamps.json
                 first_appearance = datetime.strptime(timestamps[auction_id]['first_appearance'], '%Y-%m-%d %H:%M:%S')
                 last_appearance  = datetime.strptime(timestamps[auction_id]['last_appearance'],  '%Y-%m-%d %H:%M:%S')
                 listing_age = (prediction_time - first_appearance).total_seconds() / 3600.0
@@ -183,16 +184,29 @@ def process_auctions(args):
                 
                 last_time_left_str = timestamps[auction_id]['last_time_left']
                 final_time_left_val = float(TIME_LEFT_TO_INT[last_time_left_str])
+                
+                # Check 1: Did it expire naturally?
                 is_expired_val = is_expired(listing_duration, final_time_left_val)
+                
+                # Check 2: Was its FINAL state sold? 
+                # (Rank 0 at disappearance, and didn't expire naturally, and time_left > 2.0)
+                final_buyout_rank = float(timestamps[auction_id].get('last_buyout_rank', 1.0))
+                
+                if is_expired_val == 0.0 and final_buyout_rank == 0.0 and final_time_left_val > 2.0:
+                    is_sold_val = 1.0
+                else:
+                    is_sold_val = 0.0
 
                 row_data = np.array([bid, buyout, quantity, time_left, listing_age, is_expired_val, listing_duration], dtype=np.float32)
 
                 if item_index not in auctions_by_item:
                     auctions_by_item[item_index] = {
-                        'data': [], 'contexts': [],
+                        'data': [], 'contexts': [], 'auction_ids': [], 'is_sold_vals': [],
                         'bonus_ids': [], 'modifier_types': [], 'modifier_values': []
                     }
 
+                auctions_by_item[item_index]['auction_ids'].append(auction_id)
+                auctions_by_item[item_index]['is_sold_vals'].append(is_sold_val)
                 auctions_by_item[item_index]['data'].append(row_data)
                 auctions_by_item[item_index]['contexts'].append(context)
                 auctions_by_item[item_index]['bonus_ids'].append(bonus_arr)
@@ -205,6 +219,7 @@ def process_auctions(args):
                 bonus_ids_h = np.vstack(pack['bonus_ids']).astype(np.int32, copy=False)
                 modifier_types_h = np.vstack(pack['modifier_types']).astype(np.int32, copy=False)
                 modifier_values_h = np.vstack(pack['modifier_values']).astype(np.float32, copy=False)
+                is_sold_vals_h = np.asarray(pack['is_sold_vals'], dtype=np.float32)
 
                 if data_h.shape[0] > MAX_SEQUENCE_LENGTH:
                     print(f'Capping {data_h.shape[0]} from item {item_index} to {MAX_SEQUENCE_LENGTH}')
@@ -213,21 +228,20 @@ def process_auctions(args):
                     bonus_ids_h = bonus_ids_h[:MAX_SEQUENCE_LENGTH]
                     modifier_types_h = modifier_types_h[:MAX_SEQUENCE_LENGTH]
                     modifier_values_h = modifier_values_h[:MAX_SEQUENCE_LENGTH]
+                    is_sold_vals_h = is_sold_vals_h[:MAX_SEQUENCE_LENGTH]
 
+                # Compute buyout_rank for THIS snapshot (as a feature for the model)
                 buyout_col = data_h[:, 1]
                 unique_sorted = np.sort(np.unique(buyout_col))
                 buyout_rank = np.searchsorted(unique_sorted, buyout_col).astype(np.float32)
                 
-                # To calculate sold securely we need the buyout_rank matching 0.
-                data_h = np.column_stack([data_h[:, :5], buyout_rank, data_h[:, 5:]])  # (N, 8)
-                
-                # data_h layout is now: 
+                # Combine features
                 # [0: bid, 1: buyout, 2: quantity, 3: time_left, 4: listing_age, 5: buyout_rank, 6: is_expired, 7: listing_duration]
+                data_h = np.column_stack([data_h[:, :5], buyout_rank, data_h[:, 5:]])  # (N, 8)
 
-                sold_col = np.array([is_sold(rank, exp) for rank, exp in zip(data_h[:, 5], data_h[:, 6])], dtype=np.float32)
-                
-                # insert sold before listing_duration to keep target at the end
-                data_h = np.column_stack([data_h[:, :7], sold_col, data_h[:, 7:]]) # (N, 9)
+                # insert global is_sold label before listing_duration to keep target at the end
+                # [0: bid, 1: buyout, ... 5: rank, 6: is_expired, 7: is_sold, 8: duration]
+                data_h = np.column_stack([data_h[:, :7], is_sold_vals_h, data_h[:, 7:]]) # (N, 9)
 
                 item_listing_duration = data_h[:, 8]
                 item_listing_age = data_h[:, 4]

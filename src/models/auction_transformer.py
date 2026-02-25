@@ -26,7 +26,9 @@ class AuctionTransformer(L.LightningModule):
         learning_rate: float = 1e-4,
         n_buyout_ranks: int = 64,
         quantiles: list[float] = [0.1, 0.5, 0.9],
+        pinball_loss_weight: float = 1.0,
         classification_loss_weight: float = 1.0,
+        classification_pos_weight: float = 1.0,
         logging_interval: int = 1000,
         log_raw_batch_data: bool = False,
         log_step_predictions: bool = False,
@@ -205,10 +207,13 @@ class AuctionTransformer(L.LightningModule):
         """
         labels = is_sold.float().unsqueeze(-1)  # (B, S, 1)
 
+        pos_weight = torch.tensor([self.hparams.classification_pos_weight], device=y_hat_classification.device)
+
         # Compute binary cross-entropy loss
         bce_loss = nn.functional.binary_cross_entropy_with_logits(
             y_hat_classification,
             labels,
+            pos_weight=pos_weight,
             reduction='none'
         )
         classification_loss = (bce_loss * loss_mask).sum() / loss_mask.sum().clamp_min(1e-6)
@@ -289,7 +294,7 @@ class AuctionTransformer(L.LightningModule):
         )
 
         # ----- Combine losses -----
-        total_loss = pinball_loss + self.classification_loss_weight * cls_metrics['loss']
+        total_loss = self.hparams.pinball_loss_weight * pinball_loss + self.hparams.classification_loss_weight * cls_metrics['loss']
 
         # ----- Metrics computed on the median (tau=0.5) channel -----
         median_index = self.quantiles.index(0.5)

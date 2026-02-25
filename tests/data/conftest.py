@@ -91,16 +91,23 @@ def make_minimal_mappings(output_dir: Path, item_ids=None, contexts=None,
 
 def make_timestamps_dict(auction_specs):
     """
-    Build a timestamps dict {str(auction_id): {first_appearance, last_appearance, item_id}}.
+    Build a timestamps dict {str(auction_id): {first_appearance, last_appearance, item_id, last_buyout_rank}}.
 
-    auction_specs: list of (auction_id, item_id, first_dt, last_dt)
+    auction_specs: list of (auction_id, item_id, first_dt, last_dt) OR (auction_id, item_id, first_dt, last_dt, last_buyout_rank)
     """
     result = {}
-    for auction_id, item_id, first_dt, last_dt in auction_specs:
+    for spec in auction_specs:
+        if len(spec) == 5:
+            auction_id, item_id, first_dt, last_dt, last_buyout_rank = spec
+        else:
+            auction_id, item_id, first_dt, last_dt = spec
+            last_buyout_rank = 0.0
+
         result[str(auction_id)] = {
             "first_appearance": first_dt.strftime("%Y-%m-%d %H:%M:%S"),
             "last_appearance": last_dt.strftime("%Y-%m-%d %H:%M:%S"),
             "item_id": item_id,
-            "last_time_left": "SHORT",
+            "last_time_left": "LONG",
+            "last_buyout_rank": last_buyout_rank
         }
     return result

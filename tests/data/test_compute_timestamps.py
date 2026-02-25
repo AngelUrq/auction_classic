@@ -99,3 +99,26 @@ def test_missing_auctions_key_skipped(tmp_path):
     result = process_auctions(_make_timestamp_args(tmp_path))  # must not raise
 
     assert 3001 in result
+
+
+def test_last_buyout_rank_stored(tmp_path):
+    """The last_buyout_rank must reflect the rank of the auction in its final appearance."""
+    t1 = datetime(2025, 1, 10, 0)
+    t2 = datetime(2025, 1, 10, 1)
+
+    # Hour 0: Auction 1001 is rank 0 
+    _write_auction_json(tmp_path, t1, [make_auction(1001, 100, 500_000)])
+
+    # Hour 1: Auction 1001 is now rank 1 because 1002 undercuts it.
+    _write_auction_json(tmp_path, t2, [
+        make_auction(1001, 100, 500_000),
+        make_auction(1002, 100, 250_000)
+    ])
+
+    result = process_auctions(_make_timestamp_args(tmp_path))
+
+    # Auction 1001's last appearance was at t2, where its rank was 1
+    assert result[1001]["last_buyout_rank"] == 1.0
+
+    # Auction 1002's last appearance was at t2, where its rank was 0
+    assert result[1002]["last_buyout_rank"] == 0.0

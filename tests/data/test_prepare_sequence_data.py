@@ -340,6 +340,19 @@ def test_is_expired_is_column_6_in_output(tmp_path):
     data_dir, ts_file, mappings_dir, output_dir = _build_single_auction_dir(
         tmp_path, prediction_dt=prediction_dt, first_dt=first_dt, last_dt=last_dt
     )
+    
+    ts = {
+        "1001": {
+            "first_appearance": first_dt.strftime("%Y-%m-%d %H:%M:%S"), 
+            "last_appearance": last_dt.strftime("%Y-%m-%d %H:%M:%S"), 
+            "item_id": 100, 
+            "last_time_left": "SHORT",
+            "last_buyout_rank": 0.0
+        }
+    }
+    with open(ts_file, "w") as f: 
+        json.dump(ts, f)
+
     prepare_process_auctions(_make_sequence_args(data_dir, ts_file, mappings_dir, output_dir))
 
     with open(mappings_dir / "item_to_idx.json") as f:
@@ -349,7 +362,7 @@ def test_is_expired_is_column_6_in_output(tmp_path):
     with h5py.File(output_dir / "sequences.h5", "r") as h5f:
         data = h5f[f"items/{item_index}/data"][:]
 
-    # Last time left was SHORT (0.5) thanks to conftest.py's mock timestamps
+    # Custom time left is SHORT (0.5) 
     # For a duration of 23.0 (which evaluates to EXPIRED_LISTING_DURATIONS) and time_left 0.5,
     # the function will return 1.0.
     assert data[0, 6] == pytest.approx(1.0, abs=0.01)
@@ -492,3 +505,68 @@ def test_excluded_dates_not_in_parquet(tmp_path):
 
     assert any("2025-01-10" in r for r in records)
     assert not any("2025-12-20" in r for r in records)
+
+
+def test_is_sold_is_consistent_across_snapshots(tmp_path):
+    """An auction that eventually sells (is_sold=1.0) must have that label in EVERY snapshot, even when temporarily undercut."""
+    first_dt = datetime(2025, 1, 10, 0)
+    mid_dt = datetime(2025, 1, 10, 1)
+    last_dt = datetime(2025, 1, 10, 2)
+    
+    data_dir = tmp_path / "data"
+    
+    # Hour 0: Auction 1001 is cheapest (Rank 0)
+    write_auction_file(
+        file_path_for(data_dir, first_dt),
+        [make_auction(1001, 100, 1_000_000, context=5)]
+    )
+    
+    # Hour 1: Auction 1002 undercuts (Auction 1001 becomes Rank 1)
+    write_auction_file(
+        file_path_for(data_dir, mid_dt),
+        [
+            make_auction(1001, 100, 1_000_000, context=5),
+            make_auction(1002, 100, 500_000, context=5)
+        ]
+    )
+    
+    # Hour 2: Auction 1002 disappears. Auction 1001 is cheapest again (Rank 0). This is 1001's final snapshot.
+    write_auction_file(
+        file_path_for(data_dir, last_dt),
+        [make_auction(1001, 100, 1_000_000, context=5)]
+    )
+
+    ts_file = tmp_path / "timestamps.json"
+    _write_timestamps(ts_file, [
+        (1001, 100, first_dt, last_dt, 0.0), 
+        (1002, 100, mid_dt, mid_dt, 1.0)     
+    ])
+
+    mappings_dir = tmp_path / "mappings"
+    make_minimal_mappings(mappings_dir, item_ids=[100], contexts=[5])
+    output_dir = tmp_path / "output"
+    output_dir.mkdir()
+
+    prepare_process_auctions(_make_sequence_args(data_dir, ts_file, mappings_dir, output_dir))
+
+    with open(mappings_dir / "item_to_idx.json") as f:
+        item_to_idx = json.load(f)
+    item_index = item_to_idx["100"]
+
+    with h5py.File(output_dir / "sequences.h5", "r") as h5f:
+        data = h5f[f"items/{item_index}/data"][:]
+
+    # Filter out Auction 1002's data point, we only care about 1001's 3 snapshots
+    # (Since there are 4 rows total in `data`, 3 for 1001, 1 for 1002. 
+    # Row indices in H5 are: 0 (hour 0: 1001), 1 (hour 1: 1001), 2 (hour 1: 1002), 3 (hour 2: 1001)
+    # The prices are in column 1.
+    is_1001 = data[:, 1] == 100.0  # 1_000_000 / 10000.0 = 100.0
+    data_1001 = data[is_1001]
+    
+    assert data_1001.shape[0] == 3
+    
+    # The sold column is column 7. It should be 1.0 for ALL THREE snapshots because 
+    # the auction ultimately disappeared while Rank 0.
+    assert data_1001[0, 7] == pytest.approx(1.0, abs=0.01) # Hour 0
+    assert data_1001[1, 7] == pytest.approx(1.0, abs=0.01) # Hour 1 (currently fails because rank is 1)
+    assert data_1001[2, 7] == pytest.approx(1.0, abs=0.01) # Hour 2

@@ -2,6 +2,7 @@ import os, json, time
 import argparse
 from datetime import datetime
 from tqdm import tqdm
+from collections import defaultdict
 
 def process_auctions(args):
     file_info = {}
@@ -28,20 +29,45 @@ def process_auctions(args):
                 auctions = json_data['auctions']
                 timestamp = file_info[filepath]
 
+                # Group auctions by item_id to calculate buyout_rank
+                item_prices = defaultdict(list)
                 for auction in auctions:
+                    if 'pet_species_id' in auction.get('item', {}): 
+                        continue
+                    item_id = auction['item']['id']
+                    buyout = auction.get('buyout', 0) / 10000.0
+                    item_prices[item_id].append(buyout)
+
+                # Compute ranks per item
+                item_ranks = {}
+                import numpy as np
+                for item_id, prices in item_prices.items():
+                    prices_arr = np.array(prices, dtype=np.float32)
+                    unique_sorted = np.sort(np.unique(prices_arr))
+                    item_ranks[item_id] = unique_sorted
+
+                for auction in auctions:
+                    if 'pet_species_id' in auction.get('item', {}): 
+                        continue
                     auction_id = auction['id']
-                    auction['timestamp'] = timestamp.strftime("%Y-%m-%d %H:%M:%S")
+                    item_id = auction['item']['id']
+                    buyout = auction.get('buyout', 0) / 10000.0
                     
+                    unique_sorted = item_ranks[item_id]
+                    current_rank = float(np.searchsorted(unique_sorted, np.float32(buyout)))
+
                     if auction_id not in auction_appearances:
                         auction_appearances[auction_id] = {
                             'first_appearance': timestamp.strftime("%Y-%m-%d %H:%M:%S"), 
                             'last_appearance': timestamp.strftime("%Y-%m-%d %H:%M:%S"),
                             'last_time_left': auction['time_left'],
-                            'item_id': auction['item']['id'],
+                            'last_buyout_rank': current_rank,
+                            'item_id': item_id,
                         }
                     else:
                         auction_appearances[auction_id]['last_appearance'] = timestamp.strftime("%Y-%m-%d %H:%M:%S")
                         auction_appearances[auction_id]['last_time_left'] = auction['time_left']
+                        auction_appearances[auction_id]['last_buyout_rank'] = current_rank
                 
             except json.JSONDecodeError as e:
                 print(f"Error loading file {filepath}: {e}")
