@@ -228,7 +228,9 @@ def create_model(mappings: dict, cfg: DictConfig) -> tuple[AuctionTransformer, i
         use_lr_scheduler=bool(cfg.training.use_lr_scheduler),
         quantiles=cfg.model.quantiles,
         n_buyout_ranks=int(cfg.model.n_buyout_ranks),
+        pinball_loss_weight=float(cfg.model.pinball_loss_weight),
         classification_loss_weight=float(cfg.model.classification_loss_weight),
+        classification_pos_weight=float(cfg.model.classification_pos_weight),
         max_hours_back=int(cfg.data.max_hours_back),
     )
 
