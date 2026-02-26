@@ -18,7 +18,7 @@ def predict_dataframe(model, df_auctions, prediction_time, feature_stats, max_ho
     df_out["prediction_q10"] = np.nan
     df_out["prediction_q50"] = np.nan
     df_out["prediction_q90"] = np.nan
-    df_out["is_sold"] = np.nan
+    df_out["sale_probability"] = np.nan
 
     for auction_id, df_item in grouped.items():
         # Keep the most recent entries (snapshot_offset closer to 0) and maintain
@@ -87,12 +87,6 @@ def predict_dataframe(model, df_auctions, prediction_time, feature_stats, max_ho
             snapshot_offset.unsqueeze(0),
         )
 
-        for name, t in zip(
-            ["features", "item_indices", "contexts", "bonus_ids", "modifier_types", "modifier_values", "buyout_rank", "hour_of_week", "snapshot_offset"],
-            X
-        ):
-            assert not torch.isnan(t).any(), f"NaN found in tensor: {name}"
-
         y_pred_quantiles, y_pred_classification = model(X)
 
         mask_now = (df_item["snapshot_offset"].to_numpy() == 0)
@@ -104,9 +98,9 @@ def predict_dataframe(model, df_auctions, prediction_time, feature_stats, max_ho
             df_out.loc[idx_now, "prediction_q10"] = q[0, mask_now, 0]
             df_out.loc[idx_now, "prediction_q50"] = q[0, mask_now, 1]
             df_out.loc[idx_now, "prediction_q90"] = q[0, mask_now, 2]
-            df_out.loc[idx_now, "is_sold"] = c[0, mask_now, 0]
+            df_out.loc[idx_now, "sale_probability"] = c[0, mask_now, 0]
 
-    for col in ["buyout","bid","time_left","listing_age","prediction_q10","prediction_q50","prediction_q90","is_sold"]:
+    for col in ["buyout","bid","time_left","listing_age","prediction_q10","prediction_q50","prediction_q90","sale_probability"]:
         if col in df_out.columns:
             df_out[col] = np.round(df_out[col].astype(float), 2)
 

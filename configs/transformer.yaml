@@ -5,7 +5,7 @@ data:
   date_end: "2026-02-15"
   train_split: 0.95
   train_fraction: 0.90
-  max_hours_back: 0
+  max_hours_back: 24
   max_sequence_length: 1024
   bucket_sampling: true  # Group similar-length sequences to reduce padding waste
   num_buckets: 20        # Number of length buckets (only used if bucket_sampling=true)
@@ -30,11 +30,11 @@ model:
   reset_embeddings: false
   input_size: 5
   embedding_dim: 32
-  d_model: 64
-  dim_feedforward: 256
-  nhead: 4
+  d_model: 256
+  dim_feedforward: 1024
+  nhead: 16
   num_layers: 4
-  dropout: 0.0
+  dropout: 0.1
   n_buyout_ranks: 64
   n_time_bins: 48
   quantiles: [0.1, 0.5, 0.9]

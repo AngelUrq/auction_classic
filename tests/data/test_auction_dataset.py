@@ -82,7 +82,7 @@ def test_getitem_returns_all_expected_keys(tmp_path):
     expected_keys = {
         "auction_features", "item_index", "contexts", "bonus_ids",
         "modifier_types", "modifier_values", "hour_of_week", "snapshot_offset",
-        "listing_age", "time_left", "listing_duration", "is_expired", "sold"
+        "listing_age", "time_left", "listing_duration", "is_expired", "is_sold", "buyout_rank"
     }
     assert set(sample.keys()) == expected_keys
 
@@ -229,4 +229,4 @@ def test_is_sold_extracted_correctly(tmp_path):
     ds = _build_auction_dataset(tmp_path, data=data)
     sample = ds[0]
     expected = torch.tensor([1.0, 0.0])
-    torch.testing.assert_close(sample["sold"], expected)
+    torch.testing.assert_close(sample["is_sold"], expected)

@@ -219,7 +219,7 @@ def load_auctions_from_sample(
 
             listing_age = (snapshot_time - first_appearance).total_seconds() / 3600.0
             if include_targets:
-                listing_duration = (last_appearance - snapshot_time).total_seconds() / 3600.0
+                listing_duration = float(min(int((last_appearance - first_appearance).total_seconds() / 3600), 47))
 
             snapshot_offset = int((prediction_time - snapshot_time).total_seconds() // 3600)  # negative if future
             hour_of_week = snapshot_time.weekday() * 24 + snapshot_time.hour  # 0..167
@@ -259,6 +259,23 @@ def load_auctions_from_sample(
     if not df_auctions.empty:
         df_auctions = df_auctions.sort_values(['snapshot_time', 'item_index', 'id']).reset_index(drop=True)
         df_auctions['buyout_rank'] = df_auctions.groupby(['snapshot_time', 'item_index'])['buyout'].rank(method='dense').astype(int) - 1
+
+        if include_targets:
+            # We determine the final status by grabbing the last snapshot of each auction 
+            last_rows = df_auctions.groupby('id').last()
+
+            # Check 1: Did it expire naturally?
+            is_expired_s = ((last_rows['listing_duration'].isin([11.0, 23.0, 47.0])) & (last_rows['time_left'] <= 0.5)).astype(float)
+            
+            # Check 2: Was its FINAL state sold? 
+            is_sold_s = ((last_rows['buyout_rank'] == 0) & (is_expired_s == 0.0) & (last_rows['time_left'] > 2.0)).astype(float)
+
+            # Map the exact same final status back to all snapshots for that auction id
+            df_auctions['is_expired'] = df_auctions['id'].map(is_expired_s)
+            df_auctions['is_sold'] = df_auctions['id'].map(is_sold_s)
+        else:
+            df_auctions['is_expired'] = 0.0
+            df_auctions['is_sold'] = 0.0
 
     print(
         f'Built dataframe with {len(df_auctions)} rows from {len(file_info)} snapshots '

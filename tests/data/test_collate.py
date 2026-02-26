@@ -20,13 +20,14 @@ def make_item(T: int, fill=0.0) -> dict:
         "bonus_ids":         torch.zeros(T, 9,  dtype=torch.int32),
         "modifier_types":    torch.zeros(T, 11, dtype=torch.int32),
         "modifier_values":   torch.zeros(T, 11),
+        "buyout_rank":       torch.zeros(T, dtype=torch.int32),
         "hour_of_week":      torch.zeros(T, dtype=torch.int32),
         "snapshot_offset":   torch.zeros(T, dtype=torch.int32),
         "listing_age":       torch.zeros(T),
         "time_left":         torch.zeros(T),
         "listing_duration":  torch.full((T,), fill),
         "is_expired":        torch.full((T,), fill),
-        "sold":              torch.full((T,), fill),
+        "is_sold":              torch.full((T,), fill),
     }
 
 
