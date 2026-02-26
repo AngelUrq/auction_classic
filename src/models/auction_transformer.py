@@ -34,6 +34,8 @@ class AuctionTransformer(L.LightningModule):
         log_step_predictions: bool = False,
         max_hours_back: int = 0,
         use_lr_scheduler: bool = True,
+        lr_warmup_fraction: float = 0.05,
+        lr_cosine_annealing: bool = True,
     ):
         super().__init__()
 
@@ -105,6 +107,8 @@ class AuctionTransformer(L.LightningModule):
         self.log_step_predictions = log_step_predictions
         self.quantiles = quantiles
         self.use_lr_scheduler = use_lr_scheduler
+        self.lr_warmup_fraction = lr_warmup_fraction
+        self.lr_cosine_annealing = lr_cosine_annealing
         self.classification_loss_weight = classification_loss_weight
 
     def forward(self, X):
@@ -598,10 +602,10 @@ class AuctionTransformer(L.LightningModule):
                 optimizer,
                 max_lr=self.learning_rate,
                 total_steps=self.trainer.estimated_stepping_batches,
-                pct_start=0.05,
-                div_factor=25,
+                pct_start=self.lr_warmup_fraction,
+                div_factor=25 if self.lr_warmup_fraction > 0 else 1,
                 final_div_factor=10,
-                anneal_strategy="cos"
+                anneal_strategy="cos" if self.lr_cosine_annealing else "linear",
             ),
             "interval": "step",
             "frequency": 1

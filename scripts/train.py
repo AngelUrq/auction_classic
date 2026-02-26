@@ -226,6 +226,8 @@ def create_model(mappings: dict, cfg: DictConfig) -> tuple[AuctionTransformer, i
         learning_rate=float(cfg.training.learning_rate),
         logging_interval=int(cfg.training.logging_interval),
         use_lr_scheduler=bool(cfg.training.use_lr_scheduler),
+        lr_warmup_fraction=float(cfg.training.lr_warmup_fraction),
+        lr_cosine_annealing=bool(cfg.training.lr_cosine_annealing),
         quantiles=cfg.model.quantiles,
         n_buyout_ranks=int(cfg.model.n_buyout_ranks),
         pinball_loss_weight=float(cfg.model.pinball_loss_weight),

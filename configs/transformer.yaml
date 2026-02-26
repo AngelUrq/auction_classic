@@ -16,6 +16,8 @@ training:
   batch_size: 64
   learning_rate: 1e-5
   use_lr_scheduler: true
+  lr_warmup_fraction: 0.05   # Fraction of total steps for linear warmup (0 to disable)
+  lr_cosine_annealing: true  # Use cosine annealing; false uses linear decay
   gradient_clip: 3.0
   precision: bf16
   val_check_interval: 0.1
