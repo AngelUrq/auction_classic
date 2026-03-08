@@ -228,11 +228,10 @@ def create_model(mappings: dict, cfg: DictConfig) -> tuple[AuctionTransformer, i
         use_lr_scheduler=bool(cfg.training.use_lr_scheduler),
         lr_warmup_fraction=float(cfg.training.lr_warmup_fraction),
         lr_cosine_annealing=bool(cfg.training.lr_cosine_annealing),
-        quantiles=cfg.model.quantiles,
         n_buyout_ranks=int(cfg.model.n_buyout_ranks),
-        pinball_loss_weight=float(cfg.model.pinball_loss_weight),
-        classification_loss_weight=float(cfg.model.classification_loss_weight),
-        classification_pos_weight=float(cfg.model.classification_pos_weight),
+        n_time_bins=int(cfg.model.n_time_bins),
+        deephit_nll_weight=float(cfg.model.deephit_nll_weight),
+        deephit_ranking_sigma=float(cfg.model.deephit_ranking_sigma),
         max_hours_back=int(cfg.data.max_hours_back),
     )
 
@@ -253,7 +252,7 @@ def generate_run_name(param_count: int, max_hours_back: int, learning_rate: floa
     """Generate run name based on parameters and config."""
     param_str = format_param_count(param_count)
     lr_str = format_learning_rate(learning_rate)
-    return f"transformer-{param_str}-quantile_{max_hours_back}-lr{lr_str}-bs{batch_size}"
+    return f"transformer-{param_str}-deephit_{max_hours_back}-lr{lr_str}-bs{batch_size}"
 
 
 def load_config(config_path: Path) -> DictConfig:

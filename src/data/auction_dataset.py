@@ -123,7 +123,7 @@ class AuctionDataset(Dataset):
         hour_of_week = torch.tensor(hour_of_week_np, dtype=torch.int32)
         snapshot_offset = torch.tensor(snapshot_offset_np, dtype=torch.int32)
 
-        listing_duration = auction_features[:, self.column_map["listing_duration"]]
+        listing_duration = auction_features[:, self.column_map["listing_duration"]].int()
         buyout_rank = auction_features[:, self.column_map["buyout_rank"]].long()
         auction_features = auction_features[:, :5]  # bid, buyout, qty, time_left, listing_age
 
