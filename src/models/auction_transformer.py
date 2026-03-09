@@ -331,22 +331,27 @@ class AuctionTransformer(L.LightningModule):
         return loss
 
     def _compute_segmented_mae(self, expected_durations, observed_durations, events, time_left, listing_age):
-        """Compute MAE for different auction segments (uncensored only).
+        """Compute MAE for different auction segments, both all auctions and uncensored only.
 
         Segments:
-            - general: all uncensored auctions
-            - 48h: uncensored 48h auctions
-            - fresh: uncensored 48h auctions with listing_age == 0
-            - young: uncensored 48h auctions with listing_age <= 12
+            - mae / mae_uncensored: all / uncensored auctions
+            - mae_48h / mae_48h_uncensored: all / uncensored 48h auctions
+            - mae_fresh / mae_fresh_uncensored: all / uncensored 48h auctions with listing_age == 0
+            - mae_young / mae_young_uncensored: all / uncensored 48h auctions with listing_age <= 12
         """
         uncensored = events
         is_48h = time_left == 48
+        all_auctions = torch.ones_like(events)
 
         segments = {
-            'val/mae': uncensored,
-            'val/mae_48h': uncensored & is_48h,
-            'val/mae_fresh': uncensored & is_48h & (listing_age == 0),
-            'val/mae_young': uncensored & is_48h & (listing_age <= 12),
+            'val/mae': all_auctions,
+            'val/mae_uncensored': uncensored,
+            'val/mae_48h': is_48h,
+            'val/mae_48h_uncensored': uncensored & is_48h,
+            'val/mae_fresh': is_48h & (listing_age == 0),
+            'val/mae_fresh_uncensored': uncensored & is_48h & (listing_age == 0),
+            'val/mae_young': is_48h & (listing_age <= 12),
+            'val/mae_young_uncensored': uncensored & is_48h & (listing_age <= 12),
         }
 
         for name, mask in segments.items():
@@ -388,7 +393,6 @@ class AuctionTransformer(L.LightningModule):
 
         n_bins = predicted_pmfs.shape[-1]
         mean_predicted = uncensored_pmfs.mean(dim=0)
-        observed_freq = torch.zeros(n_bins, device=predicted_pmfs.device)
         bin_counts = torch.bincount(uncensored_durations, minlength=n_bins).float()
         observed_freq = bin_counts[:n_bins] / uncensored_durations.shape[0]
 

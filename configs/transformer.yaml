@@ -5,7 +5,7 @@ data:
   date_end: "2026-02-15"
   train_split: 0.95
   train_fraction: 0.90
-  max_hours_back: 0
+  max_hours_back: 24
   max_sequence_length: 1024
   bucket_sampling: true  # Group similar-length sequences to reduce padding waste
   num_buckets: 20        # Number of length buckets (only used if bucket_sampling=true)
