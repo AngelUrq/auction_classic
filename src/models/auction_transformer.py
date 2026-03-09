@@ -1,7 +1,9 @@
 import logging
 import torch
+import wandb
 import lightning as L
 import torch.nn as nn
+from sksurv.metrics import concordance_index_censored
 
 from src.losses import NLLSurvivalLoss
 
@@ -260,8 +262,48 @@ class AuctionTransformer(L.LightningModule):
 
         return loss
 
+    def _compute_expected_duration(self, survival_logits):
+        """Compute expected duration from survival logits.
+
+        Args:
+            survival_logits: Raw logits from survival head (N, n_time_bins)
+
+        Returns:
+            Expected duration for each sample (N,)
+        """
+        pmf = torch.softmax(survival_logits, dim=-1)
+        time_bins = torch.arange(pmf.shape[-1], device=pmf.device, dtype=pmf.dtype)
+        return (pmf * time_bins).sum(dim=-1)
+
+    def _accumulate_validation_predictions(self, survival_logits, listing_duration, is_expired, item_index, snapshot_offset, time_left, listing_age):
+        """Accumulate predictions and targets for epoch-level metric computation."""
+        valid_mask = (item_index != 0) & (snapshot_offset == 0)
+
+        if not valid_mask.any():
+            return
+
+        logits = survival_logits[valid_mask]
+        expected_duration = self._compute_expected_duration(logits)
+        pmf = torch.softmax(logits, dim=-1)
+
+        self._val_expected_durations.append(expected_duration.detach())
+        self._val_predicted_pmfs.append(pmf.detach())
+        self._val_observed_durations.append(listing_duration[valid_mask].detach())
+        self._val_events.append((is_expired[valid_mask] == 0).detach())
+        self._val_time_left.append(time_left[valid_mask].detach())
+        self._val_listing_age.append(listing_age[valid_mask].detach())
+
+    def on_validation_epoch_start(self):
+        """Initialize accumulators for epoch-level metric computation."""
+        self._val_expected_durations = []
+        self._val_predicted_pmfs = []
+        self._val_observed_durations = []
+        self._val_events = []
+        self._val_time_left = []
+        self._val_listing_age = []
+
     def validation_step(self, batch, batch_idx):
-        """Compute survival loss for validation."""
+        """Compute survival loss and accumulate predictions for C-index."""
         survival_logits = self((
             batch['auction_features'],
             batch['item_index'],
@@ -279,8 +321,91 @@ class AuctionTransformer(L.LightningModule):
             batch['item_index'], batch['snapshot_offset']
         )
 
+        self._accumulate_validation_predictions(
+            survival_logits, batch['listing_duration'], batch['is_expired'],
+            batch['item_index'], batch['snapshot_offset'],
+            batch['time_left'], batch['listing_age']
+        )
+
         self._log_metrics('val', loss)
         return loss
+
+    def _compute_segmented_mae(self, expected_durations, observed_durations, events, time_left, listing_age):
+        """Compute MAE for different auction segments (uncensored only).
+
+        Segments:
+            - general: all uncensored auctions
+            - 48h: uncensored 48h auctions
+            - fresh: uncensored 48h auctions with listing_age == 0
+            - young: uncensored 48h auctions with listing_age <= 12
+        """
+        uncensored = events
+        is_48h = time_left == 48
+
+        segments = {
+            'val/mae': uncensored,
+            'val/mae_48h': uncensored & is_48h,
+            'val/mae_fresh': uncensored & is_48h & (listing_age == 0),
+            'val/mae_young': uncensored & is_48h & (listing_age <= 12),
+        }
+
+        for name, mask in segments.items():
+            if mask.any():
+                mae = (expected_durations[mask] - observed_durations[mask]).abs().mean()
+                self.log(name, mae.item(), on_epoch=True, prog_bar=(name == 'val/mae'))
+
+    def on_validation_epoch_end(self):
+        """Compute and log C-index and segmented MAE over all accumulated validation predictions."""
+        if not self._val_expected_durations:
+            return
+
+        expected_durations = torch.cat(self._val_expected_durations)
+        observed_durations = torch.cat(self._val_observed_durations)
+        events = torch.cat(self._val_events)
+        time_left = torch.cat(self._val_time_left)
+        listing_age = torch.cat(self._val_listing_age)
+
+        c_index = concordance_index_censored(
+            events.cpu().numpy(),
+            observed_durations.cpu().numpy(),
+            -expected_durations.cpu().numpy()
+        )[0]
+        self.log('val/c_index', c_index, on_epoch=True, prog_bar=True)
+
+        self._compute_segmented_mae(expected_durations, observed_durations, events, time_left, listing_age)
+
+        predicted_pmfs = torch.cat(self._val_predicted_pmfs)
+        self._compute_calibration(predicted_pmfs, observed_durations, events)
+
+    def _compute_calibration(self, predicted_pmfs, observed_durations, events):
+        """Compute per-bin calibration error and mean calibration error (uncensored only).
+
+        For each time bin, compares the model's average predicted PMF probability
+        against the observed frequency of events in that bin.
+        """
+        uncensored_pmfs = predicted_pmfs[events]
+        uncensored_durations = observed_durations[events].long()
+
+        n_bins = predicted_pmfs.shape[-1]
+        mean_predicted = uncensored_pmfs.mean(dim=0)
+        observed_freq = torch.zeros(n_bins, device=predicted_pmfs.device)
+        bin_counts = torch.bincount(uncensored_durations, minlength=n_bins).float()
+        observed_freq = bin_counts[:n_bins] / uncensored_durations.shape[0]
+
+        calibration_error = (mean_predicted - observed_freq).abs()
+
+        self.log('val/mce', calibration_error.mean().item(), on_epoch=True, prog_bar=True)
+
+        table = wandb.Table(
+            data=[[t, calibration_error[t].item()] for t in range(n_bins)],
+            columns=["time_bin", "calibration_error"],
+        )
+        self.logger.experiment.log({
+            "val/calibration_per_bin": wandb.plot.bar(
+                table, "time_bin", "calibration_error",
+                title="Calibration Error per Time Bin"
+            )
+        })
 
     def configure_optimizers(self):
         optimizer = torch.optim.AdamW(self.parameters(), lr=self.learning_rate)

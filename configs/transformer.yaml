@@ -13,7 +13,7 @@ data:
 
 training:
   num_epochs: 1
-  batch_size: 32
+  batch_size: 64
   learning_rate: 1e-5
   use_lr_scheduler: true
   lr_warmup_fraction: 0.05   # Fraction of total steps for linear warmup (0 to disable)
@@ -31,10 +31,10 @@ model:
   pretrained_path: null
   reset_embeddings: false
   input_size: 5
-  embedding_dim: 16
-  d_model: 32
-  dim_feedforward: 128
-  nhead: 4
+  embedding_dim: 32
+  d_model: 256
+  dim_feedforward: 1024
+  nhead: 16
   num_layers: 4
   dropout: 0.1
   n_buyout_ranks: 64
@@ -48,7 +48,7 @@ hardware:
 
 logging:
   wandb: true
-  project: auction_transformer
+  project: auctions_survival
 
 checkpoint:
   dir: models/

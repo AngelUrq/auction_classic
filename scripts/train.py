@@ -252,7 +252,7 @@ def generate_run_name(param_count: int, max_hours_back: int, learning_rate: floa
     """Generate run name based on parameters and config."""
     param_str = format_param_count(param_count)
     lr_str = format_learning_rate(learning_rate)
-    return f"transformer-{param_str}-deephit_{max_hours_back}-lr{lr_str}-bs{batch_size}"
+    return f"transformer-{param_str}-survival_{max_hours_back}-lr{lr_str}-bs{batch_size}"
 
 
 def load_config(config_path: Path) -> DictConfig:
