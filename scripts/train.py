@@ -232,6 +232,7 @@ def create_model(mappings: dict, cfg: DictConfig) -> tuple[AuctionTransformer, i
         n_time_bins=int(cfg.model.n_time_bins),
         deephit_nll_weight=float(cfg.model.deephit_nll_weight),
         deephit_ranking_sigma=float(cfg.model.deephit_ranking_sigma),
+        c_index_n_samples=int(cfg.model.c_index_n_samples),
         max_hours_back=int(cfg.data.max_hours_back),
     )
 

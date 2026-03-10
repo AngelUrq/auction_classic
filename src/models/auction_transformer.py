@@ -3,7 +3,7 @@ import torch
 import wandb
 import lightning as L
 import torch.nn as nn
-from sksurv.metrics import concordance_index_censored
+from torchsurv.metrics.cindex import ConcordanceIndex
 
 from src.losses import NLLSurvivalLoss, RankingLoss
 
@@ -36,6 +36,7 @@ class AuctionTransformer(L.LightningModule):
         use_lr_scheduler: bool = True,
         lr_warmup_fraction: float = 0.05,
         lr_cosine_annealing: bool = True,
+        c_index_n_samples: int = 20000,
     ):
         super().__init__()
 
@@ -385,18 +386,31 @@ class AuctionTransformer(L.LightningModule):
         events = torch.cat(self._val_events)
         time_left = torch.cat(self._val_time_left)
         listing_age = torch.cat(self._val_listing_age)
+        predicted_pmfs = torch.cat(self._val_predicted_pmfs)
 
-        c_index = concordance_index_censored(
-            events.cpu().numpy(),
-            observed_durations.cpu().numpy(),
-            -expected_durations.cpu().numpy()
-        )[0]
+        c_index = self._compute_c_index(events, observed_durations, expected_durations)
         self.log('val/c_index', c_index, on_epoch=True, prog_bar=True)
 
         self._compute_segmented_mae(expected_durations, observed_durations, events, time_left, listing_age)
-
-        predicted_pmfs = torch.cat(self._val_predicted_pmfs)
         self._compute_calibration(predicted_pmfs, observed_durations, events)
+
+    def _compute_c_index(self, events, observed_durations, expected_durations):
+        """Compute concordance index, subsampling if the dataset exceeds c_index_n_samples."""
+        n = events.shape[0]
+        n_samples = self.hparams.c_index_n_samples
+
+        if n > n_samples:
+            indices = torch.randperm(n, device=events.device)[:n_samples]
+            events = events[indices]
+            observed_durations = observed_durations[indices]
+            expected_durations = expected_durations[indices]
+
+        cindex = ConcordanceIndex()
+        return cindex(
+            -expected_durations,
+            events.bool(),
+            observed_durations.float(),
+        ).item()
 
     def _compute_calibration(self, predicted_pmfs, observed_durations, events):
         """Compute per-bin calibration error and mean calibration error (uncensored only).
