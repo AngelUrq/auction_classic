@@ -16,9 +16,9 @@ training:
   batch_size: 128
   learning_rate: 3e-5
   use_lr_scheduler: true
-  lr_warmup_fraction: 0.05   # Fraction of total steps for linear warmup (0 to disable)
+  lr_warmup_fraction: 0.1   # Fraction of total steps for linear warmup (0 to disable)
   lr_cosine_annealing: true  # Use cosine annealing; false uses linear decay
-  gradient_clip: 5.0
+  gradient_clip: 1000.0
   precision: bf16
   val_check_interval: 0.1
   limit_val_batches: 5000
@@ -40,7 +40,7 @@ model:
   n_buyout_ranks: 64
   n_time_bins: 48
   deephit_nll_weight: 0.8       # pycox alpha: loss = nll_weight * NLL + (1 - nll_weight) * rank_loss
-  deephit_ranking_sigma: 0.1   # kernel bandwidth for ranking loss (pycox sigma)
+  deephit_ranking_sigma: 0.5   # kernel bandwidth for ranking loss (pycox sigma)
   c_index_n_samples: 50000     # subsample size for C-index computation (0 = use all)
 
 hardware:

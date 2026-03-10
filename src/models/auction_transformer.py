@@ -79,6 +79,11 @@ class AuctionTransformer(L.LightningModule):
             nn.Linear(2 * embedding_dim, 2 * embedding_dim)
         )
 
+        # LayerNorm after each FiLM conditioning stage
+        self.post_context_norm = nn.LayerNorm(embedding_dim)
+        self.post_bonus_norm = nn.LayerNorm(embedding_dim)
+        self.post_modifier_norm = nn.LayerNorm(embedding_dim)
+
         # Project scalar modifier values (already normalized) into embedding space
         self.modifier_value_projection = nn.Sequential(
             nn.Linear(1, embedding_dim // 2),
@@ -143,7 +148,7 @@ class AuctionTransformer(L.LightningModule):
         anchor_context = torch.cat([item_embeddings, context_embeddings], dim=-1)      # (B,S,2D)
         gamma_beta_context = self.context_conditioning(anchor_context)                 # (B,S,2D)
         gamma_ctx, beta_ctx = torch.chunk(gamma_beta_context, 2, dim=-1)               # (B,S,D),(B,S,D)
-        item_embeddings = gamma_ctx * item_embeddings + beta_ctx                       # (B,S,D)
+        item_embeddings = self.post_context_norm(gamma_ctx * item_embeddings + beta_ctx) # (B,S,D)
 
         # -----------------------------------------------------
         # Bonuses conditioned by (conditioned item, context)
@@ -154,7 +159,7 @@ class AuctionTransformer(L.LightningModule):
         gamma_bonus = gamma_bonus.unsqueeze(-2)                                        # (B,S,1,D)
         beta_bonus  = beta_bonus.unsqueeze(-2)                                         # (B,S,1,D)
 
-        bonus_embeddings_conditioned = bonus_embeddings_full * gamma_bonus + beta_bonus
+        bonus_embeddings_conditioned = self.post_bonus_norm(bonus_embeddings_full * gamma_bonus + beta_bonus)
         bonus_sum = (bonus_embeddings_conditioned * bonus_mask).sum(dim=-2)            # (B,S,D)
         bonus_count = bonus_mask.sum(dim=-2).clamp_min(1e-6)                           # (B,S,1)
         bonus_embeddings_pooled = bonus_sum / bonus_count                              # (B,S,D)
@@ -176,7 +181,7 @@ class AuctionTransformer(L.LightningModule):
         anchor_modifier = torch.cat([item_embeddings, modifier_embeddings_pooled], dim=-1)
         gamma_beta_modifier = self.modifier_conditioning(anchor_modifier)              # (B,S,2D)
         gamma_mod, beta_mod = torch.chunk(gamma_beta_modifier, 2, dim=-1)              # (B,S,D),(B,S,D)
-        item_embeddings = gamma_mod * item_embeddings + beta_mod                       # (B,S,D)
+        item_embeddings = self.post_modifier_norm(gamma_mod * item_embeddings + beta_mod) # (B,S,D)
 
         item_embeddings_conditioned = (
             item_embeddings
