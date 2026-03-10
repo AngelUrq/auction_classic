@@ -21,7 +21,7 @@ A machine learning system for World of Warcraft auction house analysis and price
 This system predicts how long items will remain on the auction house before selling, enabling profitable trading strategies. It uses:
 
 - **Transformer-based neural networks** for sequence modeling of auction history
-- **Quantile regression** for uncertainty estimation (predicting 10th, 50th, and 90th percentiles)
+- **Survival analysis** (DeepHit-style) for predicting sale duration distributions with censoring support
 - **Historical context** from up to 24 hours of past auction snapshots
 - **Rich item features** including bonuses, modifiers, and temporal patterns
 
@@ -33,9 +33,9 @@ This system predicts how long items will remain on the auction house before sell
 - Organized storage by date (YYYY/MM/DD structure)
 
 ### Deep Learning Models
-- **AuctionTransformer**: Multi-head attention with item/context/bonus embeddings
-- **AuctionRNN**: Bidirectional GRU encoder-decoder architecture
-- Quantile loss for probabilistic predictions
+- **AuctionTransformer**: Multi-head attention with item/context/bonus embeddings and survival analysis head
+- **AuctionRNN**: Bidirectional GRU encoder-decoder architecture (baseline)
+- DeepHit-style NLL loss with censoring support for expired auctions
 
 ### Feature Engineering
 - Competitor price analysis (median, min, max, rank)
@@ -123,6 +123,7 @@ This system predicts how long items will remain on the auction house before sell
 | `pandas` / `numpy` | Data manipulation |
 | `h5py` | Efficient sequence storage |
 | `scikit-learn` | Preprocessing & evaluation |
+| `scikit-survival` | Concordance index for survival analysis |
 | `wandb` | Experiment tracking |
 | `gradio` | Web UI |
 | `tqdm` | Progress bars |
@@ -246,48 +247,34 @@ sequences.h5
 
 The primary model uses a Transformer encoder with learned embeddings:
 
+Training is configured via Hydra (`configs/transformer.yaml`):
+
 ```bash
-python -c "
-from src.models.auction_transformer import AuctionTransformer
-import lightning as L
-
-model = AuctionTransformer(
-    input_size=5,
-    n_items=50000,
-    n_contexts=100,
-    n_bonuses=5000,
-    n_modtypes=50,
-    embedding_dim=128,
-    d_model=512,
-    nhead=4,
-    num_layers=4,
-    max_hours_back=24,
-    quantiles=[0.1, 0.5, 0.9]
-)
-
-trainer = L.Trainer(max_epochs=10, accelerator='gpu')
-trainer.fit(model, train_dataloader, val_dataloader)
-"
+python scripts/train.py
+python scripts/train.py training.batch_size=128 model.num_layers=6
 ```
 
 ### Model Hyperparameters
 
 | Parameter | Default | Description |
 |-----------|---------|-------------|
-| `d_model` | 512 | Transformer hidden dimension |
-| `nhead` | 4 | Number of attention heads |
+| `d_model` | 256 | Transformer hidden dimension |
+| `nhead` | 16 | Number of attention heads |
 | `num_layers` | 4 | Number of transformer layers |
-| `embedding_dim` | 128 | Embedding dimension for categorical features |
+| `embedding_dim` | 32 | Embedding dimension for categorical features |
+| `dim_feedforward` | 1024 | Feedforward layer dimension |
+| `n_time_bins` | 48 | Number of discrete survival time bins |
+| `n_buyout_ranks` | 64 | Buyout price ranking buckets |
 | `dropout_p` | 0.1 | Dropout probability |
-| `learning_rate` | 1e-4 | Initial learning rate |
+| `learning_rate` | 1e-5 | Initial learning rate |
 | `max_hours_back` | 24 | Historical context window (hours) |
 
 ### Training Features
 
-- **Quantile Loss**: Predicts 10th, 50th, and 90th percentiles for uncertainty estimation
-- **OneCycleLR Scheduler**: Cosine annealing with warmup
-- **Weighted Loss**: Exponential decay weighting based on `listing_age`
-- **W&B Integration**: Automatic logging of metrics, gradients, and predictions
+- **Survival Analysis (DeepHit NLL)**: Predicts discrete duration distributions with censoring support — sold auctions use cross-entropy on the observed bin, expired auctions maximize log-survival probability
+- **OneCycleLR Scheduler**: Cosine annealing with 5% warmup
+- **Validation Metrics**: Concordance index (C-index), segmented MAE (overall, uncensored, 48h, fresh, young), per-bin calibration error
+- **W&B Integration**: Automatic logging of metrics, gradients, and calibration plots
 
 ### RNN Alternative
 
@@ -469,15 +456,15 @@ CREATE TABLE AuctionEvents (
 
 ### Training Metrics
 
-- **Pinball Loss**: Quantile regression loss
-- **MAE (hours)**: Mean absolute error in predicted hours
-- **Coverage**: % of targets within predicted intervals
-- **Calibration**: Observed vs. expected quantile fractions
+- **NLL Survival Loss**: DeepHit negative log-likelihood (handles censored + uncensored data)
+- **C-index**: Concordance index measuring ranking accuracy of predicted durations
+- **MAE (hours)**: Mean absolute error of expected duration vs observed (segmented by auction type)
+- **Calibration Error**: Per-bin comparison of predicted PMF vs observed frequency
 
 ### Business Metrics
 
 - **Potential Profit**: Target price - Purchase price
-- **Sale Probability**: Based on predicted hours to sale
+- **Sale Probability**: Derived from predicted survival curve
 - **ROI**: Return on investment for recommended flips
 
 ## Contributing

@@ -5,7 +5,7 @@ import lightning as L
 import torch.nn as nn
 from sksurv.metrics import concordance_index_censored
 
-from src.losses import NLLSurvivalLoss
+from src.losses import NLLSurvivalLoss, RankingLoss
 
 torch.set_float32_matmul_precision('high')
 
@@ -95,6 +95,7 @@ class AuctionTransformer(L.LightningModule):
         self.encoder = nn.TransformerEncoder(encoder_layer, num_layers=num_layers)
 
         self.nll_survival_loss = NLLSurvivalLoss()
+        self.ranking_loss = RankingLoss(sigma=deephit_ranking_sigma)
 
         self.learning_rate = learning_rate
         self.logging_interval = logging_interval
@@ -196,7 +197,9 @@ class AuctionTransformer(L.LightningModule):
         return survival_logits
 
     def _compute_survival_loss(self, survival_logits, listing_duration, is_expired, item_index, snapshot_offset):
-        """Compute survival loss over valid positions.
+        """Compute combined NLL and ranking survival loss over valid positions.
+
+        Loss = alpha * NLL + (1 - alpha) * ranking_loss, where alpha = deephit_nll_weight.
 
         Args:
             survival_logits: Raw logits from survival head (B, S, n_time_bins)
@@ -206,18 +209,29 @@ class AuctionTransformer(L.LightningModule):
             snapshot_offset: Snapshot offset for selecting current auctions (B, S)
 
         Returns:
-            Loss scalar
+            Tuple of (combined loss, nll loss, ranking loss) scalars
         """
         valid_mask = (item_index != 0) & (snapshot_offset == 0)
 
         if not valid_mask.any():
-            return 0.0 * survival_logits.sum()
+            zero = 0.0 * survival_logits.sum()
+            return zero, zero, zero
 
         logits = survival_logits[valid_mask]          # (N, n_time_bins)
         durations = listing_duration[valid_mask]       # (N,)
         events = 1.0 - is_expired[valid_mask].float()  # sold=1, expired=0
 
-        return self.nll_survival_loss(logits, durations, events)
+        nll = self.nll_survival_loss(logits, durations, events)
+
+        alpha = self.hparams.deephit_nll_weight
+        if alpha < 1.0:
+            rank = self.ranking_loss(logits, durations, events)
+            loss = alpha * nll + (1.0 - alpha) * rank
+        else:
+            rank = torch.tensor(0.0, device=logits.device)
+            loss = nll
+
+        return loss, nll, rank
 
     def _compute_gradient_norm(self):
         """Compute the total gradient norm across all parameters."""
@@ -229,10 +243,12 @@ class AuctionTransformer(L.LightningModule):
         total_norm = total_norm ** (1. / 2)
         return total_norm
 
-    def _log_metrics(self, prefix, loss):
+    def _log_metrics(self, prefix, loss, nll, rank):
         """Log metrics for training or validation."""
         on_step = (prefix == 'train')
         self.log(f'{prefix}/loss', loss, on_step=on_step, on_epoch=True, prog_bar=True, batch_size=1)
+        self.log(f'{prefix}/nll', nll, on_step=on_step, on_epoch=True, batch_size=1)
+        self.log(f'{prefix}/rank', rank, on_step=on_step, on_epoch=True, batch_size=1)
 
     def training_step(self, batch, batch_idx):
         """Compute survival loss and log training metrics."""
@@ -248,12 +264,12 @@ class AuctionTransformer(L.LightningModule):
             batch['snapshot_offset'],
         ))
 
-        loss = self._compute_survival_loss(
+        loss, nll, rank = self._compute_survival_loss(
             survival_logits, batch['listing_duration'], batch['is_expired'],
             batch['item_index'], batch['snapshot_offset']
         )
 
-        self._log_metrics('train', loss)
+        self._log_metrics('train', loss, nll, rank)
         self.log('train/lr', self.optimizers().param_groups[0]['lr'], on_step=True, on_epoch=True)
 
         if self.global_step % self.logging_interval == 0:
@@ -316,7 +332,7 @@ class AuctionTransformer(L.LightningModule):
             batch['snapshot_offset'],
         ))
 
-        loss = self._compute_survival_loss(
+        loss, nll, rank = self._compute_survival_loss(
             survival_logits, batch['listing_duration'], batch['is_expired'],
             batch['item_index'], batch['snapshot_offset']
         )
@@ -327,7 +343,7 @@ class AuctionTransformer(L.LightningModule):
             batch['time_left'], batch['listing_age']
         )
 
-        self._log_metrics('val', loss)
+        self._log_metrics('val', loss, nll, rank)
         return loss
 
     def _compute_segmented_mae(self, expected_durations, observed_durations, events, time_left, listing_age):

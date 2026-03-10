@@ -65,25 +65,34 @@ python scripts/analyze/benchmark_dataloader.py
 ```
 
 ### Core Model (`src/models/auction_transformer.py`)
-Multi-task Transformer (~4.2M params) built with PyTorch Lightning:
+Survival analysis Transformer built with PyTorch Lightning:
 
 **Inputs per auction record:**
 - `auction_features`: (B, S, 5) — bid, buyout, quantity, time_left, listing_age
 - `item_index`, `contexts`: categorical IDs → learned embeddings
 - `bonus_ids`: (B, S, 9) — bonus IDs, conditioned on (item, context) via FiLM
 - `modifier_types`, `modifier_values`: (B, S, 11) — modifier embeddings + projected scalars
+- `buyout_rank`: (B, S) — relative price rank among competitors → learned embedding
 - `hour_of_week` (0–167), `snapshot_offset` (0–72): temporal embeddings
 
 **Architecture:**
-- FiLM conditioning: context modulates item embeddings
+- FiLM conditioning: context modulates item embeddings; (item, context) modulates bonuses; item ← modifier conditioning
 - Bonus/modifier aggregation with mask-aware averaging
-- TransformerEncoder: 4 layers, d_model=64, nhead=4, dim_feedforward=256
-- **Regression head**: → 3 quantile outputs (τ=0.1, 0.5, 0.9) via pinball loss
-- **Classification head**: → 1 binary logit (is_short_duration, threshold=8h) via BCE
+- TransformerEncoder: 4 layers, d_model=256, nhead=16, dim_feedforward=1024
+- **Survival head**: → `n_time_bins` (48) logits → softmax → discrete PMF over duration bins
+
+**Loss (DeepHit-style NLL, `src/losses/nll_loss.py`):**
+- Uncensored (sold) auctions: cross-entropy on the observed duration bin
+- Censored (expired) auctions: negative log-survival probability at the observed time
+- Combined: `events * nll_uncensored + (1 - events) * nll_censored`
+
+**Validation metrics:**
+- C-index (concordance index via `sksurv`)
+- Segmented MAE: overall, uncensored-only, 48h auctions, fresh (listing_age=0), young (listing_age≤12)
+- Calibration error: per-bin predicted PMF vs observed frequency (uncensored)
 
 **Training details:**
-- AdamW + OneCycleLR scheduler
-- Exponential sample weighting (recent listings weighted higher)
+- AdamW + OneCycleLR scheduler (cosine annealing, 5% warmup)
 - Gradient clipping: 3.0, precision: bfloat16
 - Experiment tracking: Weights & Biases
 
@@ -107,7 +116,8 @@ Key tunable parameters:
 - `data.max_hours_back`: Historical context window (default 72h)
 - `model.pretrained_path`: Checkpoint to fine-tune from
 - `model.reset_embeddings`: Reinitialize embeddings when loading checkpoint
-- `training.classification_loss_weight`: Balance between quantile and classification tasks
+- `model.n_time_bins`: Number of discrete survival time bins (default 48)
+- `model.deephit_nll_weight`: Weight for NLL loss component
 
 ### Generated Artifacts
 - `generated/mappings/`: Vocabulary JSONs (17,955 items, 64 contexts, ~1,405 bonuses)
