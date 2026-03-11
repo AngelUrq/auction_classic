@@ -29,7 +29,8 @@ class AuctionTransformer(L.LightningModule):
         learning_rate: float = 1e-4,
         n_buyout_ranks: int = 64,
         n_time_bins: int = 48,
-        deephit_nll_weight: float = 0.8,
+        nll_weight: float = 1.0,
+        rank_weight: float = 20.0,
         deephit_ranking_sigma: float = 0.1,
         logging_interval: int = 1000,
         max_hours_back: int = 0,
@@ -108,6 +109,10 @@ class AuctionTransformer(L.LightningModule):
         self.use_lr_scheduler = use_lr_scheduler
         self.lr_warmup_fraction = lr_warmup_fraction
         self.lr_cosine_annealing = lr_cosine_annealing
+        self.nll_weight = nll_weight
+        self.rank_weight = rank_weight
+        self.c_index_n_samples = c_index_n_samples
+        self.n_buyout_ranks = n_buyout_ranks
 
     def forward(self, X):
         """Run the forward pass through embeddings, FiLM conditioning, and transformer encoder.
@@ -126,7 +131,7 @@ class AuctionTransformer(L.LightningModule):
         context_embeddings = self.context_embeddings(contexts.long())                  # (B,S,D)
         bonus_embeddings_full = self.bonus_embeddings(bonus_ids.long())                # (B,S,K,D)
         modifier_type_embeddings = self.modifier_embeddings(modifier_types.long())     # (B,S,M,D)
-        buyout_rank_embeddings = self.buyout_rank_embeddings(buyout_rank.clamp(0, self.hparams.n_buyout_ranks - 1).long())  # (B,S,D)
+        buyout_rank_embeddings = self.buyout_rank_embeddings(buyout_rank.clamp(0, self.n_buyout_ranks - 1).long())  # (B,S,D)
         hour_of_week_embeddings = self.hour_of_week_embeddings(hour_of_week.long())    # (B,S,D)
         snapshot_offset_embeddings = self.snapshot_offset_embeddings(snapshot_offset.long())  # (B,S,D)
 
@@ -205,7 +210,7 @@ class AuctionTransformer(L.LightningModule):
     def _compute_survival_loss(self, survival_logits, listing_duration, is_expired, item_index, snapshot_offset):
         """Compute combined NLL and ranking survival loss over valid positions.
 
-        Loss = alpha * NLL + (1 - alpha) * ranking_loss, where alpha = deephit_nll_weight.
+        Loss = nll_weight * NLL + rank_weight * ranking_loss.
 
         Args:
             survival_logits: Raw logits from survival head (B, S, n_time_bins)
@@ -229,13 +234,12 @@ class AuctionTransformer(L.LightningModule):
 
         nll = self.nll_survival_loss(logits, durations, events)
 
-        alpha = self.hparams.deephit_nll_weight
-        if alpha < 1.0:
+        if self.rank_weight > 0.0:
             rank = self.ranking_loss(logits, durations, events)
-            loss = alpha * nll + (1.0 - alpha) * rank
+            loss = self.nll_weight * nll + self.rank_weight * rank
         else:
             rank = torch.tensor(0.0, device=logits.device)
-            loss = nll
+            loss = self.nll_weight * nll
 
         return loss, nll, rank
 
@@ -278,11 +282,13 @@ class AuctionTransformer(L.LightningModule):
         self._log_metrics('train', loss, nll, rank)
         self.log('train/lr', self.optimizers().param_groups[0]['lr'], on_step=True, on_epoch=True)
 
+        return loss
+
+    def on_after_backward(self):
+        """Log gradient norm after backward pass."""
         if self.global_step % self.logging_interval == 0:
             grad_norm = self._compute_gradient_norm()
             self.log('train/grad_norm', grad_norm, on_step=True, on_epoch=True, prog_bar=True)
-
-        return loss
 
     def _compute_expected_duration(self, survival_logits):
         """Compute expected duration from survival logits.
@@ -353,27 +359,22 @@ class AuctionTransformer(L.LightningModule):
         return loss
 
     def _compute_segmented_mae(self, expected_durations, observed_durations, events, time_left, listing_age):
-        """Compute MAE for different auction segments, both all auctions and uncensored only.
+        """Compute MAE for different auction segments.
 
         Segments:
-            - mae / mae_uncensored: all / uncensored auctions
-            - mae_48h / mae_48h_uncensored: all / uncensored 48h auctions
-            - mae_fresh / mae_fresh_uncensored: all / uncensored 48h auctions with listing_age == 0
-            - mae_young / mae_young_uncensored: all / uncensored 48h auctions with listing_age <= 12
+            - mae: all auctions
+            - mae_48h: 48h auctions
+            - mae_fresh: 48h auctions with listing_age == 0
+            - mae_young: 48h auctions with listing_age <= 12
         """
-        uncensored = events
         is_48h = time_left == 48
         all_auctions = torch.ones_like(events)
 
         segments = {
             'val/mae': all_auctions,
-            'val/mae_uncensored': uncensored,
             'val/mae_48h': is_48h,
-            'val/mae_48h_uncensored': uncensored & is_48h,
             'val/mae_fresh': is_48h & (listing_age == 0),
-            'val/mae_fresh_uncensored': uncensored & is_48h & (listing_age == 0),
             'val/mae_young': is_48h & (listing_age <= 12),
-            'val/mae_young_uncensored': uncensored & is_48h & (listing_age <= 12),
         }
 
         for name, mask in segments.items():
@@ -402,9 +403,9 @@ class AuctionTransformer(L.LightningModule):
     def _compute_c_index(self, events, observed_durations, expected_durations):
         """Compute concordance index, subsampling if the dataset exceeds c_index_n_samples."""
         n = events.shape[0]
-        n_samples = self.hparams.c_index_n_samples
+        n_samples = self.c_index_n_samples
 
-        if n > n_samples:
+        if n_samples > 0 and n > n_samples:
             indices = torch.randperm(n, device=events.device)[:n_samples]
             events = events[indices]
             observed_durations = observed_durations[indices]

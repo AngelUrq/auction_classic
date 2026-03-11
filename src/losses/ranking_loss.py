@@ -35,7 +35,7 @@ class RankingLoss(nn.Module):
         rank_mat = self._build_rank_matrix(durations, events)   # (N, N)
         r = self._compute_cdf_difference(pmf, durations)        # (N, N)
 
-        loss = rank_mat * torch.exp(-r / self.sigma)            # (N, N)
+        loss = rank_mat * torch.exp((-r / self.sigma).clamp(max=10))  # (N, N)
         loss = loss.mean(dim=1)                                 # (N,)
         return loss.mean()
 

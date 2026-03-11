@@ -39,8 +39,9 @@ model:
   dropout: 0.1
   n_buyout_ranks: 64
   n_time_bins: 48
-  deephit_nll_weight: 0.8       # pycox alpha: loss = nll_weight * NLL + (1 - nll_weight) * rank_loss
-  deephit_ranking_sigma: 0.5   # kernel bandwidth for ranking loss (pycox sigma)
+  nll_weight: 1.0              # weight for NLL survival loss component
+  rank_weight: 20.0            # weight for ranking loss component
+  deephit_ranking_sigma: 0.1   # kernel bandwidth for ranking loss (pycox sigma)
   c_index_n_samples: 50000     # subsample size for C-index computation (0 = use all)
 
 hardware:
