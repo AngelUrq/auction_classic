@@ -1,4 +1,22 @@
-[tool.pytest.ini_options]
-testpaths = ["tests"]
-python_files = ["test_*.py"]
-python_functions = ["test_*"]
+[project]
+name = "auction-classic"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.9"
+dependencies = [
+    "h5py>=3.14.0",
+    "lightning>=2.6.0",
+    "matplotlib>=3.9.4",
+    "omegaconf>=2.3.0",
+    "optuna>=4.8.0",
+    "pandas>=2.3.3",
+    "pyarrow>=21.0.0",
+    "scikit-learn>=1.5.2",
+    "scikit-survival>=0.23.1",
+    "torch>=2.8.0",
+    "torch-tb-profiler>=0.4.3",
+    "torchsurv>=0.1.6",
+    "tqdm>=4.67.3",
+    "wandb>=0.25.1",
+]
