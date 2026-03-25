@@ -192,7 +192,7 @@ def generate_recommendations(expected_profit, median_discount=0.75):
             "prediction_q10": float(pred_row["prediction_q10"]),
             "prediction_q50": float(pred_row["prediction_q50"]),
             "prediction_q90": float(pred_row["prediction_q90"]),
-            "is_sold": float(pred_row["is_sold"]),
+            "sale_probability": float(pred_row["sale_probability"]),
             "potential_profit": round(potential_profit, 2),
         })
         recommendations_list.append(recommendation)
@@ -285,9 +285,9 @@ def create_ui():
                 prediction_results = prediction_results[prediction_results['snapshot_offset'] == 0]
 
                 if prediction_results.empty:
-                    return pd.DataFrame(columns=['item_id', 'buyout', 'quantity', 'time_left', 'context', 'bonus_ids', 'modifier_types', 'modifier_values', 'listing_age', 'prediction_q10', 'prediction_q50', 'prediction_q90', 'is_sold'])
+                    return pd.DataFrame(columns=['item_id', 'buyout', 'quantity', 'time_left', 'context', 'bonus_ids', 'modifier_types', 'modifier_values', 'listing_age', 'prediction_q10', 'prediction_q50', 'prediction_q90', 'expected_duration', 'sale_probability'])
 
-                display_columns_prediction = display_columns + ['prediction_q10', 'prediction_q50', 'prediction_q90', 'is_sold']
+                display_columns_prediction = display_columns + ['prediction_q10', 'prediction_q50', 'prediction_q90', 'expected_duration', 'sale_probability']
                 return prediction_results[display_columns_prediction].head(100)
 
             def store_item_csv(item_id, _time_offset_value):
@@ -477,7 +477,7 @@ def create_ui():
                     'predicted_hours_q10': flip_prediction['prediction_q10'],
                     'predicted_hours_q50': flip_prediction['prediction_q50'],
                     'predicted_hours_q90': flip_prediction['prediction_q90'],
-                    'is_sold': flip_prediction['is_sold']
+                    'sale_probability': flip_prediction['sale_probability']
                 }])
 
                 return result
