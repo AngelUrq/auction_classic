@@ -30,6 +30,7 @@ class AuctionTransformer(L.LightningModule):
         n_buyout_ranks: int = 64,
         n_time_bins: int = 48,
         nll_weight: float = 1.0,
+        nll_censored_weight: float = 1.0,
         rank_weight: float = 20.0,
         deephit_ranking_sigma: float = 0.1,
         logging_interval: int = 1000,
@@ -101,7 +102,7 @@ class AuctionTransformer(L.LightningModule):
         )
         self.encoder = nn.TransformerEncoder(encoder_layer, num_layers=num_layers)
 
-        self.nll_survival_loss = NLLSurvivalLoss()
+        self.nll_survival_loss = NLLSurvivalLoss(censored_weight=nll_censored_weight)
         self.ranking_loss = RankingLoss(sigma=deephit_ranking_sigma)
 
         self.learning_rate = learning_rate

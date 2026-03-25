@@ -10,7 +10,15 @@ class NLLSurvivalLoss(nn.Module):
     For uncensored (sold) auctions, maximizes the log-probability of the observed
     duration bin. For censored (expired) auctions, maximizes the log-survival
     probability at the observed time.
+
+    Args:
+        censored_weight: Multiplier applied to censored (expired) loss terms.
+            Values < 1.0 downweight expired auctions to counteract censoring imbalance.
     """
+
+    def __init__(self, censored_weight: float = 1.0):
+        super().__init__()
+        self.censored_weight = censored_weight
 
     def forward(self, logits: Tensor, listing_durations: Tensor, events: Tensor) -> Tensor:
         """Compute NLL survival loss.
@@ -47,6 +55,8 @@ class NLLSurvivalLoss(nn.Module):
 
         # Each sample contributes exactly one term:
         #   sold    (events=1): point log-likelihood at observed bin
-        #   expired (events=0): log-survival at censoring time
-        loss = events * nll_uncensored + (1.0 - events) * nll_censored
+        #   expired (events=0): log-survival at censoring time (× censored_weight)
+        # censored_weight < 1 discounts expired auctions to counteract the heavy
+        # censoring imbalance, ensuring sold auctions drive meaningful gradient signal.
+        loss = events * nll_uncensored + self.censored_weight * (1.0 - events) * nll_censored
         return loss.mean()
