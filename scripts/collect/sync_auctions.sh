@@ -1,11 +1,11 @@
 #!/bin/bash
 
 REMOTE_USER="pi"
-REMOTE_HOST="192.168.100.194"
+REMOTE_HOST="192.168.100.185"
 REMOTE_AUCTIONS_DIR="/media/pi/USB-DATA/auctions/"
 REMOTE_COMMODITIES_DIR="/media/pi/USB-DATA/commodities/"
-LOCAL_AUCTIONS_DIR="/home/angel/source/auction_classic/data/auctions/"
-LOCAL_COMMODITIES_DIR="/home/angel/source/auction_classic/data/commodities/"
+LOCAL_AUCTIONS_DIR="/Users/angel/Source/auction_classic/data/auctions/"
+LOCAL_COMMODITIES_DIR="/Users/angel/Source/auction_classic/data/commodities/"
 SSH_KEY="$HOME/.ssh/id_rsa"
 
 mkdir -p "$LOCAL_AUCTIONS_DIR"

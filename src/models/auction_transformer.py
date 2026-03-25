@@ -100,7 +100,7 @@ class AuctionTransformer(L.LightningModule):
             batch_first=True,
             dropout=dropout_p
         )
-        self.encoder = nn.TransformerEncoder(encoder_layer, num_layers=num_layers)
+        self.encoder = nn.TransformerEncoder(encoder_layer, num_layers=num_layers, enable_nested_tensor=False)
 
         self.nll_survival_loss = NLLSurvivalLoss(censored_weight=nll_censored_weight)
         self.ranking_loss = RankingLoss(sigma=deephit_ranking_sigma)
