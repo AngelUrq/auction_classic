@@ -91,7 +91,7 @@ def predict_pmf(model, df_item, feature_stats, max_hours_back=0, max_sequence_le
     return pmf, df_item
 
 
-def predict_dataframe(model, df_auctions, prediction_time, feature_stats, max_hours_back=0, max_sequence_length=4096, quick_sale_threshold_hours=12):
+def predict_dataframe(model, df_auctions, prediction_time, feature_stats, max_hours_back=0, max_sequence_length=4096, quick_sale_threshold_hours=12, show_progress=False):
     """Run inference for all items in df_auctions and return predictions at snapshot_offset==0.
 
     Args:
@@ -122,7 +122,8 @@ def predict_dataframe(model, df_auctions, prediction_time, feature_stats, max_ho
     df_out["expected_duration"] = np.nan
     df_out["sale_probability"]  = np.nan
 
-    for _, df_item in grouped.items():
+    items_iter = tqdm(grouped.items(), total=len(grouped), desc="Predicting") if show_progress else grouped.items()
+    for _, df_item in items_iter:
         pmf, df_item = predict_pmf(model, df_item, feature_stats, max_hours_back, max_sequence_length)
         # pmf: (S, n_time_bins) on CPU
 
