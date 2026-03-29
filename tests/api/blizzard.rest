@@ -1,0 +1,29 @@
+# Blizzard API
+# Requires REST Client VS Code extension
+# Run the "Get OAuth token" request first, then the others will use its response automatically
+
+### Get OAuth token
+# @name auth
+POST https://us.battle.net/oauth/token
+Authorization: Basic {{$dotenv BLIZZARD_CLIENT_KEY}}:{{$dotenv BLIZZARD_SECRET_KEY}}
+Content-Type: application/x-www-form-urlencoded
+
+grant_type=client_credentials
+
+###
+
+### Get auctions
+GET https://us.api.blizzard.com/data/wow/connected-realm/{{$dotenv BLIZZARD_REALM_ID}}/auctions?namespace=dynamic-us&locale=en_US
+Authorization: Bearer {{auth.response.body.access_token}}
+
+###
+
+### Get commodities
+GET https://us.api.blizzard.com/data/wow/auctions/commodities?namespace=dynamic-us&locale=en_US
+Authorization: Bearer {{auth.response.body.access_token}}
+
+###
+
+### Get item (Thunderfury)
+GET https://us.api.blizzard.com/data/wow/item/19019?namespace=static-us&locale=en_US
+Authorization: Bearer {{auth.response.body.access_token}}

@@ -10,6 +10,7 @@ __pycache__/
 *.xlsx
 
 data/auctions/
+data/commodities/
 notebooks/wandb/
 .gradio/
 wandb/
