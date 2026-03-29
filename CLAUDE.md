@@ -10,8 +10,7 @@ WoW auction house price predictor: collects Blizzard API data, trains a Transfor
 
 **Install dependencies:**
 ```bash
-python -m venv venv && source venv/bin/activate
-pip install -r requirements.txt
+uv sync
 ```
 
 **Run training** (Hydra config at `configs/transformer.yaml`):
@@ -54,7 +53,7 @@ python scripts/analyze/benchmark_dataloader.py
 
 ### Data Flow
 ```
-[Blizzard API hourly cron] → data/auctions/YYYY/MM/DD/HHZ.json
+[Blizzard API hourly cron] → data/auctions/YYYY/MM/DD/YYYYMMDDThh.json
     → compute_timestamps.py  → generated/timestamps.json
     → process_mappings.py    → generated/mappings/{item,context,bonus,modtype}_to_idx.json
     → prepare_sequence_data.py → generated/sequences.h5 + generated/indices.parquet
