@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import argparse
+import functools
 import logging
 import pickle
 from pathlib import Path
@@ -53,12 +54,13 @@ def _accumulate_batch(
     sum_sq_features: torch.Tensor | None,
     modifier_sum: torch.Tensor | None,
     modifier_sum_sq: torch.Tensor | None,
+    device: torch.device = torch.device("cpu"),
 ) -> tuple[torch.Tensor, torch.Tensor, int, torch.Tensor, torch.Tensor, int]:
     """Accumulate sums and squared sums for auctions and modifiers."""
-    auction_features = batch["auction_features"]
-    modifier_values = batch["modifier_values"]
+    auction_features = batch["auction_features"].to(device)
+    modifier_values = batch["modifier_values"].to(device)
 
-    valid_mask = batch["item_index"] != 0
+    valid_mask = batch["item_index"].to(device) != 0
 
     auction_mask = valid_mask.unsqueeze(-1).expand_as(auction_features)
     valid_auctions = auction_features[auction_mask].reshape(-1, auction_features.size(-1))
@@ -98,6 +100,12 @@ def compute_feature_stats(
     dataloader: torch.utils.data.DataLoader, max_batches: int | None = None
 ) -> dict:
     """Compute per-feature mean/std for auctions and modifier values."""
+    if torch.backends.mps.is_available():
+        device = torch.device("mps")
+    else:
+        device = torch.device("cpu")
+    logger.info("Computing feature stats on device: %s", device)
+
     sum_features = None
     sum_sq_features = None
     total_count = 0
@@ -118,7 +126,7 @@ def compute_feature_stats(
             modifier_sum_sq,
             batch_modifier_count,
         ) = _accumulate_batch(
-            batch, sum_features, sum_sq_features, modifier_sum, modifier_sum_sq
+            batch, sum_features, sum_sq_features, modifier_sum, modifier_sum_sq, device
         )
 
         total_count += batch_count
@@ -245,8 +253,8 @@ def main():
         dataset,
         batch_size=batch_size,
         shuffle=True,
-        collate_fn=lambda b: collate_auctions(
-            b, max_sequence_length=args.max_sequence_length
+        collate_fn=functools.partial(
+            collate_auctions, max_sequence_length=args.max_sequence_length
         ),
         num_workers=num_workers,
         pin_memory=False,

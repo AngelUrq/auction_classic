@@ -25,7 +25,21 @@ ROW_CHUNK = 1024
 # We exclude the first times of these days because their data is not complete.
 # listing_age is not available for these days as you need to wait 48 hours to get it.
 # We also exclude the last days because if you publish an auction in the last day, you can't get the listing_duration.
-exclude_first_times = ['20-12-2025', '21-12-2025','22-12-2025', '19-02-2026', '20-02-2026', '21-02-2026']
+exclude_first_times = [
+    '11-03-2026', 
+    '12-03-2026',
+    '25-03-2026',
+    '26-03-2026',
+    '27-03-2026',
+    '28-03-2026',
+    '29-03-2026',
+    '09-04-2026', 
+    '10-04-2026',
+    '11-04-2026',
+    '30-04-2026',
+    '01-05-2026',
+    '02-05-2026',
+]
 last_exclude_date = datetime.strptime(exclude_first_times[-1], '%d-%m-%Y')
 
 

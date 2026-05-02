@@ -14,17 +14,16 @@ class AuctionDataset(Dataset):
         feature_stats=None,
         root="generated/memmap",
         max_hours_back=0,
+        memmap_arrays=None,
     ):
         """
         Memmap-backed dataset using global .npy arrays.
 
         root is the directory created by convert_hdf5_to_npy.py and must contain:
-            data.npy
-            contexts.npy
-            bonus_ids.npy
-            modifier_types.npy
-            modifier_values.npy
-            idx_map_global.pkl
+            data.npy, contexts.npy, bonus_ids.npy, modifier_types.npy, modifier_values.npy
+
+        Pass memmap_arrays dict (data, contexts, bonus_ids, modifier_types, modifier_values)
+        to share memory across multiple dataset instances instead of reading from disk.
         """
         self.pairs = pairs.reset_index(drop=True)
         self.idx_map = idx_map_global
@@ -43,25 +42,28 @@ class AuctionDataset(Dataset):
             "listing_duration": 8,
         }
 
-        data_mm = np.memmap(os.path.join(root, "data.npy"), mode="r", dtype=np.float32)
-        total_rows = data_mm.size // 9
-        self.data = data_mm.reshape((total_rows, 9))
-
-        self.contexts = np.memmap(
-            os.path.join(root, "contexts.npy"), mode="r", dtype=np.int32
-        )
-
-        self.bonus_ids = np.memmap(
-            os.path.join(root, "bonus_ids.npy"), mode="r", dtype=np.int32
-        ).reshape((total_rows, 9))
-
-        self.modifier_types = np.memmap(
-            os.path.join(root, "modifier_types.npy"), mode="r", dtype=np.int32
-        ).reshape((total_rows, 11))
-
-        self.modifier_values = np.memmap(
-            os.path.join(root, "modifier_values.npy"), mode="r", dtype=np.float32
-        ).reshape((total_rows, 11))
+        if memmap_arrays is not None:
+            self.data = memmap_arrays["data"]
+            self.contexts = memmap_arrays["contexts"]
+            self.bonus_ids = memmap_arrays["bonus_ids"]
+            self.modifier_types = memmap_arrays["modifier_types"]
+            self.modifier_values = memmap_arrays["modifier_values"]
+        else:
+            data_mm = np.memmap(os.path.join(root, "data.npy"), mode="r", dtype=np.float32)
+            total_rows = data_mm.size // 9
+            self.data = data_mm.reshape((total_rows, 9))
+            self.contexts = np.memmap(
+                os.path.join(root, "contexts.npy"), mode="r", dtype=np.int32
+            )
+            self.bonus_ids = np.memmap(
+                os.path.join(root, "bonus_ids.npy"), mode="r", dtype=np.int32
+            ).reshape((total_rows, 9))
+            self.modifier_types = np.memmap(
+                os.path.join(root, "modifier_types.npy"), mode="r", dtype=np.int32
+            ).reshape((total_rows, 11))
+            self.modifier_values = np.memmap(
+                os.path.join(root, "modifier_values.npy"), mode="r", dtype=np.float32
+            ).reshape((total_rows, 11))
 
     def __len__(self):
         return len(self.pairs)

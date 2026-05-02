@@ -5,6 +5,8 @@ import pickle
 import sys
 from pathlib import Path
 
+import numpy as np
+
 import lightning as L
 import pandas as pd
 import torch
@@ -28,6 +30,18 @@ from src.data.auction_dataset import AuctionDataset
 from src.data.bucket_sampler import BucketBatchSampler, get_lengths
 from src.data.utils import collate_auctions
 from src.models.auction_transformer import AuctionTransformer
+
+
+def load_memmap_arrays_into_ram(root: str) -> dict:
+    data_mm = np.memmap(root + "/data.npy", mode="r", dtype=np.float32)
+    total_rows = data_mm.size // 9
+    return {
+        "data": np.array(data_mm.reshape((total_rows, 9))),
+        "contexts": np.array(np.memmap(root + "/contexts.npy", mode="r", dtype=np.int32)),
+        "bonus_ids": np.array(np.memmap(root + "/bonus_ids.npy", mode="r", dtype=np.int32).reshape((total_rows, 9))),
+        "modifier_types": np.array(np.memmap(root + "/modifier_types.npy", mode="r", dtype=np.int32).reshape((total_rows, 11))),
+        "modifier_values": np.array(np.memmap(root + "/modifier_values.npy", mode="r", dtype=np.float32).reshape((total_rows, 11))),
+    }
 
 
 def format_param_count(count: int) -> str:
@@ -113,12 +127,19 @@ def create_dataloaders(
         global_idx_map = pickle.load(f)
     logger.info(f"  Loaded {len(global_idx_map):,} entries")
 
+    shared_arrays = None
+    if cfg.data.get("preload_memmap", False):
+        logger.info("Preloading memmap arrays into RAM...")
+        shared_arrays = load_memmap_arrays_into_ram(memmap_root)
+        logger.info("Preloading done.")
+
     train_dataset = AuctionDataset(
         pairs=train_pairs,
         idx_map_global=global_idx_map,
         feature_stats=feature_stats,
         root=memmap_root,
         max_hours_back=cfg.data.max_hours_back,
+        memmap_arrays=shared_arrays,
     )
     val_dataset = AuctionDataset(
         pairs=val_pairs,
@@ -126,6 +147,7 @@ def create_dataloaders(
         feature_stats=feature_stats,
         root=memmap_root,
         max_hours_back=cfg.data.max_hours_back,
+        memmap_arrays=shared_arrays,
     )
 
     num_workers = cfg.training.num_workers
