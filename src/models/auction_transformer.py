@@ -292,7 +292,10 @@ class AuctionTransformer(L.LightningModule):
             self.log('train/grad_norm', grad_norm, on_step=True, on_epoch=True, prog_bar=True)
 
     def _compute_expected_duration(self, survival_logits):
-        """Compute expected duration from survival logits.
+        """Compute expected duration from survival logits, excluding the beyond-horizon sink bin.
+
+        The last bin represents P(T > max_hours) and is excluded so that the expected
+        duration reflects time-to-disappear conditioned on disappearing within the window.
 
         Args:
             survival_logits: Raw logits from survival head (N, n_time_bins)
@@ -301,8 +304,10 @@ class AuctionTransformer(L.LightningModule):
             Expected duration for each sample (N,)
         """
         pmf = torch.softmax(survival_logits, dim=-1)
-        time_bins = torch.arange(pmf.shape[-1], device=pmf.device, dtype=pmf.dtype)
-        return (pmf * time_bins).sum(dim=-1)
+        pmf_sale = pmf[:, :-1]                                                  # (N, n_time_bins-1)
+        time_bins = torch.arange(pmf_sale.shape[-1], device=pmf.device, dtype=pmf.dtype)
+        sale_prob = pmf_sale.sum(dim=-1).clamp_min(1e-6)
+        return (pmf_sale * time_bins).sum(dim=-1) / sale_prob
 
     def _accumulate_validation_predictions(self, survival_logits, listing_duration, is_expired, item_index, snapshot_offset, time_left, listing_age):
         """Accumulate predictions and targets for epoch-level metric computation."""
@@ -425,10 +430,13 @@ class AuctionTransformer(L.LightningModule):
         For each time bin, compares the model's average predicted PMF probability
         against the observed frequency of events in that bin.
         """
-        uncensored_pmfs = predicted_pmfs[events]
+        # Exclude the beyond-horizon sink bin: observed durations are always in 0..n_bins-2,
+        # so the sink never appears as a target and comparing against it is meaningless.
+        n_bins = predicted_pmfs.shape[-1] - 1
+        uncensored_pmfs = predicted_pmfs[events][:, :n_bins]
+        uncensored_pmfs = uncensored_pmfs / uncensored_pmfs.sum(dim=-1, keepdim=True).clamp_min(1e-6)
         uncensored_durations = observed_durations[events].long()
 
-        n_bins = predicted_pmfs.shape[-1]
         mean_predicted = uncensored_pmfs.mean(dim=0)
         bin_counts = torch.bincount(uncensored_durations, minlength=n_bins).float()
         observed_freq = bin_counts[:n_bins] / uncensored_durations.shape[0]

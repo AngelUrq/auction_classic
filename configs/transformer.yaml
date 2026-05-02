@@ -38,7 +38,7 @@ model:
   num_layers: 4
   dropout: 0.1
   n_buyout_ranks: 64
-  n_time_bins: 48
+  n_time_bins: 49
   nll_weight: 1.0              # weight for NLL survival loss component
   nll_censored_weight: 0.1     # downweight expired auctions (< 1.0 reduces bin-47 bias)
   rank_weight: 20.0            # weight for ranking loss component

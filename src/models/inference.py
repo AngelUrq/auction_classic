@@ -131,16 +131,24 @@ def predict_dataframe(model, df_auctions, prediction_time, feature_stats, max_ho
         if not mask_now.any():
             continue
 
-        cdf = pmf.cumsum(dim=-1)  # (S, n_time_bins)
-        n_time_bins = pmf.shape[-1]
-        time_bins = torch.arange(n_time_bins, dtype=pmf.dtype)
+        # Exclude the beyond-horizon sink bin (last bin) from quantile and duration
+        # estimates so predictions reflect time-to-disappear conditioned on disappearing.
+        # sale_probability = P(disappears within quick_sale_threshold_hours) uses the
+        # raw (unconditional) pmf, giving a direct probability without normalization.
+        n_sale_bins = pmf.shape[-1] - 1                                # bins 0..n-2
+        pmf_sale = pmf[:, :n_sale_bins]                                # (S, n_sale_bins)
+        sale_prob_mass = pmf_sale.sum(dim=-1).clamp_min(1e-6)          # (S,)
+        conditional_pmf = pmf_sale / sale_prob_mass.unsqueeze(-1)      # (S, n_sale_bins)
 
-        q10 = (cdf >= 0.1).float().argmax(dim=-1)  # (S,)
+        cdf = conditional_pmf.cumsum(dim=-1)                           # (S, n_sale_bins)
+        time_bins = torch.arange(n_sale_bins, dtype=pmf.dtype)
+
+        q10 = (cdf >= 0.1).float().argmax(dim=-1)                      # (S,)
         q50 = (cdf >= 0.5).float().argmax(dim=-1)
         q90 = (cdf >= 0.9).float().argmax(dim=-1)
-        expected_duration = (pmf * time_bins).sum(dim=-1)  # (S,)
-        threshold = min(quick_sale_threshold_hours, n_time_bins)
-        sale_probability = pmf[:, :threshold].sum(dim=-1)  # (S,)
+        expected_duration = (conditional_pmf * time_bins).sum(dim=-1)  # (S,)
+        threshold = min(quick_sale_threshold_hours, n_sale_bins)
+        sale_probability = pmf[:, :threshold].sum(dim=-1)              # (S,) unconditional P(T < threshold)
 
         idx_now = df_item.index[mask_now]
         df_out.loc[idx_now, "prediction_q10"]   = q10[mask_now].float().numpy()
