@@ -18,6 +18,7 @@ lightning_logs/
 outputs/
 
 setup.sh
+onstart.sh
 
 .vscode/
 
