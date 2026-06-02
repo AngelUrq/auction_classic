@@ -5,6 +5,8 @@ import pickle
 import sys
 from pathlib import Path
 
+import wandb
+
 import numpy as np
 
 import lightning as L
@@ -272,6 +274,21 @@ def format_learning_rate(lr: float) -> str:
     return f"{lr:g}"
 
 
+def _log_checkpoint_artifact(
+    wandb_logger: WandbLogger,
+    checkpoint_callback: ModelCheckpoint,
+    run_name: str,
+) -> None:
+    dirpath = checkpoint_callback.dirpath
+    if not dirpath or not Path(dirpath).exists():
+        logger.warning("Checkpoint directory not found, skipping artifact upload")
+        return
+    artifact = wandb.Artifact(name=run_name, type="model")
+    artifact.add_dir(dirpath)
+    wandb_logger.experiment.log_artifact(artifact)
+    logger.info("Logged model artifact from %s", dirpath)
+
+
 def generate_run_name(param_count: int, max_hours_back: int, learning_rate: float, batch_size: int) -> str:
     """Generate run name based on parameters and config."""
     param_str = format_param_count(param_count)
@@ -443,6 +460,9 @@ def main():
         val_dataloader,
         ckpt_path=None,
     )
+
+    if wandb_logger is not None:
+        _log_checkpoint_artifact(wandb_logger, checkpoint_callback, run_name)
 
     logger.info("=" * 60)
     logger.info("Training complete!")
