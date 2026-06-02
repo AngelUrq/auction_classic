@@ -78,12 +78,13 @@ Survival analysis Transformer built with PyTorch Lightning:
 - FiLM conditioning: context modulates item embeddings; (item, context) modulates bonuses; item ← modifier conditioning
 - Bonus/modifier aggregation with mask-aware averaging
 - TransformerEncoder: 4 layers, d_model=256, nhead=16, dim_feedforward=1024
-- **Survival head**: → `n_time_bins` (48) logits → softmax → discrete PMF over duration bins
+- **Survival head**: → `n_time_bins` (48) logits → per-bin sigmoid hazards (no softmax, no sink bin); `survival_pmf` (`src/models/survival.py`) decodes them into the discrete event PMF for metrics/inference
 
-**Loss (DeepHit-style NLL, `src/losses/nll_loss.py`):**
-- Uncensored (sold) auctions: cross-entropy on the observed duration bin
-- Censored (expired) auctions: negative log-survival probability at the observed time
-- Combined: `events * nll_uncensored + (1 - events) * nll_censored`
+**Loss (discrete-time hazard / nnet-survival, `src/losses/hazard_loss.py`):**
+- Each bin is an independent hazard `h_j = sigmoid(logit_j)` = P(sells in bin j | survived to j)
+- Per auction, binary cross-entropy over at-risk bins `0..k`: target 1 only at the observed bin `k` when sold, else 0 ("survived this bin")
+- No shared softmax budget, so censored auctions can't pull all mass into a tail/sink bin (the failure mode of the old DeepHit NLL in `src/losses/nll_loss.py`, kept for reference)
+- Optional DeepHit ranking aux (`src/losses/ranking_loss.py`, `rank_weight`, default 0) consumes the decoded PMF
 
 **Validation metrics:**
 - C-index (concordance index via `sksurv`)
@@ -115,8 +116,9 @@ Key tunable parameters:
 - `data.max_hours_back`: Historical context window (default 72h)
 - `model.pretrained_path`: Checkpoint to fine-tune from
 - `model.reset_embeddings`: Reinitialize embeddings when loading checkpoint
-- `model.n_time_bins`: Number of discrete survival time bins (default 48)
-- `model.deephit_nll_weight`: Weight for NLL loss component
+- `model.n_time_bins`: Number of discrete hazard/duration bins (default 48, one per hour)
+- `model.nll_weight`: Weight for the hazard (nnet-survival) NLL component
+- `model.rank_weight`: Weight for the optional DeepHit ranking aux loss (default 0)
 
 ### Generated Artifacts
 - `generated/mappings/`: Vocabulary JSONs (17,955 items, 64 contexts, ~1,405 bonuses)

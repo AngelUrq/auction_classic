@@ -5,7 +5,8 @@ import lightning as L
 import torch.nn as nn
 from torchsurv.metrics.cindex import ConcordanceIndex
 
-from src.losses import NLLSurvivalLoss, RankingLoss
+from src.losses import HazardSurvivalLoss, RankingLoss
+from src.models.survival import survival_pmf
 
 torch.set_float32_matmul_precision('high')
 
@@ -30,7 +31,6 @@ class AuctionTransformer(L.LightningModule):
         n_buyout_ranks: int = 64,
         n_time_bins: int = 48,
         nll_weight: float = 1.0,
-        nll_censored_weight: float = 1.0,
         rank_weight: float = 20.0,
         deephit_ranking_sigma: float = 0.1,
         logging_interval: int = 1000,
@@ -102,7 +102,7 @@ class AuctionTransformer(L.LightningModule):
         )
         self.encoder = nn.TransformerEncoder(encoder_layer, num_layers=num_layers, enable_nested_tensor=False)
 
-        self.nll_survival_loss = NLLSurvivalLoss(censored_weight=nll_censored_weight)
+        self.hazard_survival_loss = HazardSurvivalLoss()
         self.ranking_loss = RankingLoss(sigma=deephit_ranking_sigma)
 
         self.learning_rate = learning_rate
@@ -233,10 +233,10 @@ class AuctionTransformer(L.LightningModule):
         durations = listing_duration[valid_mask]       # (N,)
         events = 1.0 - is_expired[valid_mask].float()  # sold=1, expired=0
 
-        nll = self.nll_survival_loss(logits, durations, events)
+        nll = self.hazard_survival_loss(logits, durations, events)
 
         if self.rank_weight > 0.0:
-            rank = self.ranking_loss(logits, durations, events)
+            rank = self.ranking_loss(survival_pmf(logits), durations, events)
             loss = self.nll_weight * nll + self.rank_weight * rank
         else:
             rank = torch.tensor(0.0, device=logits.device)
@@ -292,10 +292,11 @@ class AuctionTransformer(L.LightningModule):
             self.log('train/grad_norm', grad_norm, on_step=True, on_epoch=True, prog_bar=True)
 
     def _compute_expected_duration(self, survival_logits):
-        """Compute expected duration from survival logits, excluding the beyond-horizon sink bin.
+        """Compute expected duration from survival logits, conditioned on disappearing in-window.
 
-        The last bin represents P(T > max_hours) and is excluded so that the expected
-        duration reflects time-to-disappear conditioned on disappearing within the window.
+        The hazard PMF sums to P(disappears within the window); the missing mass,
+        prod_j (1 - h_j), is P(survives beyond horizon) and carries no bin. Dividing by
+        the in-window mass yields the expected time-to-disappear conditioned on disappearing.
 
         Args:
             survival_logits: Raw logits from survival head (N, n_time_bins)
@@ -303,11 +304,10 @@ class AuctionTransformer(L.LightningModule):
         Returns:
             Expected duration for each sample (N,)
         """
-        pmf = torch.softmax(survival_logits, dim=-1)
-        pmf_sale = pmf[:, :-1]                                                  # (N, n_time_bins-1)
-        time_bins = torch.arange(pmf_sale.shape[-1], device=pmf.device, dtype=pmf.dtype)
-        sale_prob = pmf_sale.sum(dim=-1).clamp_min(1e-6)
-        return (pmf_sale * time_bins).sum(dim=-1) / sale_prob
+        pmf = survival_pmf(survival_logits)                                    # (N, n_time_bins)
+        time_bins = torch.arange(pmf.shape[-1], device=pmf.device, dtype=pmf.dtype)
+        sale_prob = pmf.sum(dim=-1).clamp_min(1e-6)
+        return (pmf * time_bins).sum(dim=-1) / sale_prob
 
     def _accumulate_validation_predictions(self, survival_logits, listing_duration, is_expired, item_index, snapshot_offset, time_left, listing_age):
         """Accumulate predictions and targets for epoch-level metric computation."""
@@ -318,7 +318,7 @@ class AuctionTransformer(L.LightningModule):
 
         logits = survival_logits[valid_mask]
         expected_duration = self._compute_expected_duration(logits)
-        pmf = torch.softmax(logits, dim=-1)
+        pmf = survival_pmf(logits)
 
         self._val_expected_durations.append(expected_duration.detach())
         self._val_predicted_pmfs.append(pmf.detach())
@@ -430,10 +430,11 @@ class AuctionTransformer(L.LightningModule):
         For each time bin, compares the model's average predicted PMF probability
         against the observed frequency of events in that bin.
         """
-        # Exclude the beyond-horizon sink bin: observed durations are always in 0..n_bins-2,
-        # so the sink never appears as a target and comparing against it is meaningless.
-        n_bins = predicted_pmfs.shape[-1] - 1
-        uncensored_pmfs = predicted_pmfs[events][:, :n_bins]
+        # Every bin is a real duration bin (the hazard model has no sink bin); the
+        # beyond-horizon mass is implicit. Condition on disappearing in-window so the
+        # per-bin PMF sums to 1 before comparing against observed event frequencies.
+        n_bins = predicted_pmfs.shape[-1]
+        uncensored_pmfs = predicted_pmfs[events]
         uncensored_pmfs = uncensored_pmfs / uncensored_pmfs.sum(dim=-1, keepdim=True).clamp_min(1e-6)
         uncensored_durations = observed_durations[events].long()
 

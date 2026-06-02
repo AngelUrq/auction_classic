@@ -1,6 +1,5 @@
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 from torch import Tensor
 
 
@@ -18,18 +17,19 @@ class RankingLoss(nn.Module):
         super().__init__()
         self.sigma = sigma
 
-    def forward(self, logits: Tensor, listing_durations: Tensor, events: Tensor) -> Tensor:
+    def forward(self, pmf: Tensor, listing_durations: Tensor, events: Tensor) -> Tensor:
         """Compute the DeepHit ranking loss.
 
         Args:
-            logits: Raw logits from survival head (N, n_time_bins).
+            pmf: Discrete event PMF (N, n_time_bins). Caller is responsible for the
+                logits -> PMF conversion (e.g. survival_pmf for the hazard model), so
+                this loss is agnostic to the survival head's parametrization.
             listing_durations: Observed duration bin index, 0 to n_time_bins-1 (N,).
             events: 1.0 = sold (uncensored), 0.0 = expired (censored) (N,).
 
         Returns:
             Scalar mean ranking loss.
         """
-        pmf = F.softmax(logits, dim=-1)                         # (N, T)
         durations = listing_durations.long()
 
         rank_mat = self._build_rank_matrix(durations, events)   # (N, N)

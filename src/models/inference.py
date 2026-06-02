@@ -3,6 +3,8 @@ import numpy as np
 import pandas as pd
 from tqdm import tqdm
 
+from src.models.survival import survival_pmf
+
 
 MAX_BONUSES = 9
 MAX_MODIFIERS = 11
@@ -87,7 +89,7 @@ def predict_pmf(model, df_item, feature_stats, max_hours_back=0, max_sequence_le
     with torch.no_grad():
         survival_logits = model(X)  # (1, S, n_time_bins)
 
-    pmf = torch.softmax(survival_logits[0], dim=-1).cpu()  # (S, n_time_bins)
+    pmf = survival_pmf(survival_logits[0]).cpu()  # (S, n_time_bins)
     return pmf, df_item
 
 
@@ -131,14 +133,14 @@ def predict_dataframe(model, df_auctions, prediction_time, feature_stats, max_ho
         if not mask_now.any():
             continue
 
-        # Exclude the beyond-horizon sink bin (last bin) from quantile and duration
-        # estimates so predictions reflect time-to-disappear conditioned on disappearing.
+        # The hazard PMF sums to P(disappears in-window); the missing mass is
+        # P(survives beyond horizon) and carries no bin. Condition on disappearing so
+        # quantile and duration estimates reflect time-to-disappear given disappearance.
         # sale_probability = P(disappears within quick_sale_threshold_hours) uses the
         # raw (unconditional) pmf, giving a direct probability without normalization.
-        n_sale_bins = pmf.shape[-1] - 1                                # bins 0..n-2
-        pmf_sale = pmf[:, :n_sale_bins]                                # (S, n_sale_bins)
-        sale_prob_mass = pmf_sale.sum(dim=-1).clamp_min(1e-6)          # (S,)
-        conditional_pmf = pmf_sale / sale_prob_mass.unsqueeze(-1)      # (S, n_sale_bins)
+        n_sale_bins = pmf.shape[-1]                                    # every bin is a sale bin
+        sale_prob_mass = pmf.sum(dim=-1).clamp_min(1e-6)              # (S,)
+        conditional_pmf = pmf / sale_prob_mass.unsqueeze(-1)         # (S, n_sale_bins)
 
         cdf = conditional_pmf.cumsum(dim=-1)                           # (S, n_sale_bins)
         time_bins = torch.arange(n_sale_bins, dtype=pmf.dtype)
