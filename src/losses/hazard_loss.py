@@ -19,7 +19,19 @@ class HazardSurvivalLoss(nn.Module):
 
     i.e. binary cross-entropy over bins 0..k with target 1 only at bin k when the
     event occurred (sold).
+
+    Args:
+        pos_weight: Multiplier on the positive (event) BCE term, passed through to
+            binary_cross_entropy_with_logits. Sale events are rare relative to the
+            "survived this bin" negatives that dominate every at-risk bin, which pulls
+            the hazards low and makes the model under-call quick sales. Values > 1.0
+            up-weight the events, raising the hazards and quick-sale recall (at some
+            cost to precision/calibration). 1.0 disables the reweighting.
     """
+
+    def __init__(self, pos_weight: float = 1.0):
+        super().__init__()
+        self.pos_weight = pos_weight
 
     def forward(self, logits: Tensor, listing_durations: Tensor, events: Tensor) -> Tensor:
         """Compute the discrete-time hazard NLL.
@@ -44,6 +56,9 @@ class HazardSurvivalLoss(nn.Module):
         targets = torch.zeros_like(logits)                                   # (N, T)
         targets.scatter_(1, observed_bin, events.unsqueeze(1).to(logits.dtype))  # (N, T)
 
-        per_bin_loss = F.binary_cross_entropy_with_logits(logits, targets, reduction='none')  # (N, T)
+        pos_weight = logits.new_tensor(self.pos_weight) if self.pos_weight != 1.0 else None
+        per_bin_loss = F.binary_cross_entropy_with_logits(
+            logits, targets, pos_weight=pos_weight, reduction='none'
+        )                                                                # (N, T)
         auction_loss = (per_bin_loss * at_risk_mask).sum(dim=-1)        # (N,)
         return auction_loss.mean()
