@@ -136,7 +136,8 @@ def load_auctions_from_sample(
     bonus_to_idx,
     modtype_to_idx,
     max_hours_back=0,
-    include_targets=True
+    include_targets=True,
+    max_snapshot_offset=None
 ):
     past_hours = 48 + max_hours_back
     future_hours = 48 + max_hours_back if include_targets else 0
@@ -276,6 +277,34 @@ def load_auctions_from_sample(
         else:
             df_auctions['is_expired'] = 0.0
             df_auctions['is_sold'] = 0.0
+
+        # Drop snapshots older than the caller needs. The full past window is still
+        # read in pass 1 so listing_age/buyout_rank stay accurate; we only discard the
+        # surplus rows here, after every derived column has been computed.
+        if max_snapshot_offset is not None:
+            df_auctions = df_auctions[df_auctions['snapshot_offset'] <= max_snapshot_offset].reset_index(drop=True)
+
+        # Downcast numeric columns to shrink the in-memory frame. The list-valued
+        # columns (bonus_ids/modifier_types/modifier_values) and the int64 auction id
+        # are left untouched.
+        downcast_dtypes = {
+            'item_index': 'int32',
+            'quantity': 'int32',
+            'context': 'int16',
+            'snapshot_offset': 'int16',
+            'hour_of_week': 'int16',
+            'buyout_rank': 'int32',
+            'bid': 'float32',
+            'buyout': 'float32',
+            'time_left': 'float32',
+            'listing_age': 'float32',
+            'listing_duration': 'float32',
+            'is_expired': 'float32',
+            'is_sold': 'float32',
+        }
+        for column, dtype in downcast_dtypes.items():
+            if column in df_auctions.columns:
+                df_auctions[column] = df_auctions[column].astype(dtype)
 
     print(
         f'Built dataframe with {len(df_auctions)} rows from {len(file_info)} snapshots '
