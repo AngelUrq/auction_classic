@@ -149,7 +149,7 @@ def predict_dataframe(model, df_auctions, prediction_time, feature_stats, max_ho
         q50 = (cdf >= 0.5).float().argmax(dim=-1)
         q90 = (cdf >= 0.9).float().argmax(dim=-1)
         expected_duration = (conditional_pmf * time_bins).sum(dim=-1)  # (S,)
-        threshold = min(quick_sale_threshold_hours, n_sale_bins)
+        threshold = int(min(quick_sale_threshold_hours, n_sale_bins))
         sale_probability = pmf[:, :threshold].sum(dim=-1)              # (S,) unconditional P(T < threshold)
 
         idx_now = df_item.index[mask_now]

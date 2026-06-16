@@ -26,21 +26,11 @@ ROW_CHUNK = 1024
 # listing_age is not available for these days as you need to wait 48 hours to get it.
 # We also exclude the last days because if you publish an auction in the last day, you can't get the listing_duration.
 exclude_first_times = [
-    '11-03-2026', 
-    '12-03-2026',
-    '25-03-2026',
-    '26-03-2026',
-    '27-03-2026',
-    '28-03-2026',
-    '29-03-2026',
-    '09-04-2026', 
-    '10-04-2026',
-    '11-04-2026',
-    '30-04-2026',
-    '01-05-2026',
-    '02-05-2026',
+    '27-05-2026',
+    '28-05-2026',
 ]
-last_exclude_date = datetime.strptime(exclude_first_times[-1], '%d-%m-%Y')
+# Exclude the last 2 days: auctions listed that recently can't have a known listing_duration yet.
+data_end_date = datetime(2026, 6, 13)
 
 
 def is_expired(listing_duration, time_left):
@@ -150,7 +140,7 @@ def process_auctions(args):
     # Process per day with tqdm
     for day_key, day_files in tqdm(list(files_by_day.items()), desc='days'):
         day_files = [(fp, dt) for (fp, dt) in day_files
-                     if not (dt.date() > last_exclude_date.date() or dt.strftime('%d-%m-%Y') in exclude_first_times)]
+                     if not (dt.date() > data_end_date.date() or dt.strftime('%d-%m-%Y') in exclude_first_times)]
         if not day_files:
             tqdm.write(f"[day {day_key}] skipped (policy filtered)")
             continue
