@@ -28,6 +28,7 @@ recommendations = None
 ckpt_path = './models/transformer-4.2M-survival_24-lr3e-05-bs128/last.ckpt'
 max_hours_back = 24
 max_sequence_length = 1024
+max_display_offset = 24  # Current Auctions slider tops out here; drop older snapshots
 sold_threshold = 8
 
 item_to_idx = None
@@ -89,7 +90,8 @@ def _reload_data():
         bonus_to_idx,
         modtype_to_idx,
         max_hours_back=max_hours_back,
-        include_targets=False
+        include_targets=False,
+        max_snapshot_offset=max_display_offset
     )
     new_df['item_id'] = new_df['item_index'].map(idx_to_item)
     print(f"Reloaded {len(new_df)} auctions as of {new_prediction_time}")
@@ -313,7 +315,7 @@ def create_ui():
             with gr.Row():
                 item_search = gr.Textbox(label="Search by Item ID", placeholder="Enter item ID...")
                 search_button = gr.Button("Search")
-                time_offset_filter = gr.Slider(label="Display Time Offset (hours ago)", minimum=0, maximum=48, value=0, step=1)
+                time_offset_filter = gr.Slider(label="Display Time Offset (hours ago)", minimum=0, maximum=24, value=0, step=1)
                 predict_button = gr.Button("Predict Sale Probability")
                 store_csv_button = gr.Button("Store CSV")
 
