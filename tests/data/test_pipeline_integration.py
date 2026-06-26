@@ -179,12 +179,11 @@ def test_pipeline_batch_shapes_correct(pipeline_output):
     B = batch["auction_features"].shape[0]
     T = batch["auction_features"].shape[1]
 
-    assert batch["auction_features"].shape == (B, T, 5)
+    assert batch["auction_features"].shape == (B, T, 6)
     assert batch["bonus_ids"].shape == (B, T, 9)
     assert batch["modifier_types"].shape == (B, T, 11)
     assert batch["listing_duration"].shape == (B, T)
     assert batch["is_expired"].shape == (B, T)
-    assert batch["is_sold"].shape == (B, T)
 
 
 def test_pipeline_listing_duration_non_negative(pipeline_output):
@@ -232,5 +231,3 @@ def test_pipeline_feature_values_finite(pipeline_output):
         "NaN or Inf found in auction_features"
     assert torch.isfinite(batch["is_expired"]).all(), \
         "NaN or Inf found in is_expired"
-    assert torch.isfinite(batch["is_sold"]).all(), \
-        "NaN or Inf found in is_sold"

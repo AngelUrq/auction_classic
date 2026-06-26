@@ -67,11 +67,12 @@ python scripts/analyze/benchmark_dataloader.py
 Survival analysis Transformer built with PyTorch Lightning:
 
 **Inputs per auction record:**
-- `auction_features`: (B, S, 5) — bid, buyout, quantity, time_left, listing_age
+- `auction_features`: (B, S, 6) — bid, buyout, time_left, listing_age, log_price_over_floor, fraction_cheaper
+  - `log_price_over_floor` = log(buyout / cheapest competitor); `fraction_cheaper` = fraction of competing listings strictly cheaper (both continuous, per snapshot×item; see `src/data/price_features.py`)
 - `item_index`, `contexts`: categorical IDs → learned embeddings
 - `bonus_ids`: (B, S, 9) — bonus IDs, conditioned on (item, context) via FiLM
 - `modifier_types`, `modifier_values`: (B, S, 11) — modifier embeddings + projected scalars
-- `buyout_rank`: (B, S) — relative price rank among competitors → learned embedding
+- `buyout_rank`: (B, S) — dense price rank among competitors (capped at `n_buyout_ranks`=16) → learned embedding
 - `hour_of_week` (0–167), `snapshot_offset` (0–72): temporal embeddings
 
 **Architecture:**

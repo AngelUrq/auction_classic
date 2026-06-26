@@ -17,6 +17,7 @@ sys.path.append(str(wd))
 from tqdm import tqdm
 from src.models.inference import predict_dataframe
 from src.data.utils import load_auctions_from_sample
+from src.data.price_features import relative_price_features_for_candidate
 from src.models.auction_transformer import AuctionTransformer
 
 model_loaded = False
@@ -226,6 +227,14 @@ def generate_recommendations(min_profit, min_sale_probability, hold_horizon_hour
         relist_row["snapshot_time"] = pred_time
         relist_row["snapshot_offset"] = 0
         relist_row["hour_of_week"] = pred_time.weekday() * 24 + pred_time.hour
+
+        # Recompute the price-position features for our relisting against the live
+        # competitors (the bought auction has already been dropped from df_item_full).
+        competitor_buyouts = df_item_full.loc[df_item_full["snapshot_offset"] == 0, "buyout"].to_numpy()
+        log_price_over_floor, fraction_cheaper = relative_price_features_for_candidate(relist_price, competitor_buyouts)
+        relist_row["log_price_over_floor"] = log_price_over_floor
+        relist_row["fraction_cheaper"] = fraction_cheaper
+        relist_row["buyout_rank"] = int((np.unique(competitor_buyouts) < relist_price).sum())
 
         df_item_full = pd.concat([df_item_full, pd.DataFrame([relist_row])], ignore_index=True)
 
@@ -463,7 +472,7 @@ def create_ui():
             gr.Markdown("- **predicted_hours_q10**: 10th percentile (optimistic timing)")
             gr.Markdown("- **predicted_hours_q50**: 50th percentile (median hours to sale)")
             gr.Markdown("- **predicted_hours_q90**: 90th percentile (pessimistic timing)")
-            gr.Markdown("- **is_sold**: Probability (0-1) that the item will sell")
+            gr.Markdown("- **sale_probability**: Probability (0-1) that the item will sell")
 
             with gr.Row():
                 flip_item_search = gr.Textbox(label="Search by Item ID", placeholder="Enter item ID...")

@@ -31,14 +31,14 @@ training:
 model:
   pretrained_path: null
   reset_embeddings: false
-  input_size: 5
-  embedding_dim: 32
-  d_model: 256
-  dim_feedforward: 1024
+  input_size: 6              # bid, buyout, time_left, listing_age, log_price_over_floor, fraction_cheaper
+  embedding_dim: 16
+  d_model: 128
+  dim_feedforward: 512
   nhead: 16
-  num_layers: 4
+  num_layers: 2
   dropout: 0.1
-  n_buyout_ranks: 64
+  n_buyout_ranks: 16         # dense rank tops out ~45 but p99=16; tail bucketed into one well-trained slot
   n_time_bins: 48              # one hazard per duration hour (0..47); no sink bin
   nll_weight: 1.0              # weight for hazard (nnet-survival) NLL component
   pos_weight: 1.0              # up-weight rare sale events (>1 raises quick-sale recall); 1.0 = off

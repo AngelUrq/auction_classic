@@ -14,7 +14,7 @@ from data.utils import collate_auctions
 def make_item(T: int, fill=0.0) -> dict:
     """Create a batch item dict with sequence length T."""
     return {
-        "auction_features":  torch.full((T, 5),  fill),
+        "auction_features":  torch.full((T, 6),  fill),
         "item_index":        torch.zeros(T, dtype=torch.int32),
         "contexts":          torch.zeros(T, dtype=torch.int32),
         "bonus_ids":         torch.zeros(T, 9,  dtype=torch.int32),
@@ -27,7 +27,6 @@ def make_item(T: int, fill=0.0) -> dict:
         "time_left":         torch.zeros(T),
         "listing_duration":  torch.full((T,), fill),
         "is_expired":        torch.full((T,), fill),
-        "is_sold":              torch.full((T,), fill),
     }
 
 
@@ -39,7 +38,7 @@ def test_no_crop_when_under_limit():
     """A sequence shorter than max_sequence_length must not be cropped."""
     item = make_item(5)
     result = collate_auctions([item], max_sequence_length=10)
-    assert result["auction_features"].shape == (1, 5, 5)
+    assert result["auction_features"].shape == (1, 5, 6)
 
 
 def test_crops_from_left_keeping_most_recent():
@@ -61,7 +60,7 @@ def test_pads_shorter_sequence_to_batch_max():
     long_ = make_item(5)
     result = collate_auctions([short, long_], max_sequence_length=None)
 
-    assert result["auction_features"].shape == (2, 5, 5)
+    assert result["auction_features"].shape == (2, 5, 6)
 
 
 def test_pads_shorter_sequence_with_zeros():
@@ -91,7 +90,7 @@ def test_2d_field_padded_correctly():
     long_ = make_item(4)
     result = collate_auctions([short, long_])
 
-    assert result["auction_features"].shape == (2, 4, 5)
+    assert result["auction_features"].shape == (2, 4, 6)
     assert (result["auction_features"][0, 2:, :] == 0.0).all()
 
 

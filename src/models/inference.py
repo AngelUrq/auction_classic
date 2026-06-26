@@ -33,16 +33,25 @@ def predict_pmf(model, df_item, feature_stats, max_hours_back=0, max_sequence_le
     if max_sequence_length is not None and len(df_item) > max_sequence_length:
         df_item = df_item.tail(max_sequence_length)
 
+    # Must match AuctionDataset's auction_features order/transforms:
+    # [bid, buyout, time_left, listing_age, log_price_over_floor, fraction_cheaper].
+    # log1p only on the raw magnitudes (bid, buyout); the relative features are
+    # already final. log_price_over_floor / fraction_cheaper are precomputed on the
+    # DataFrame (load_auctions_from_sample / the recommendation sweep).
+    num_auction_features = 6
     features_np = np.stack([
         np.log1p(df_item["bid"].to_numpy(dtype=np.float32)),
         np.log1p(df_item["buyout"].to_numpy(dtype=np.float32)),
-        df_item["quantity"].to_numpy(dtype=np.float32),
         df_item["time_left"].to_numpy(dtype=np.float32),
         df_item["listing_age"].to_numpy(dtype=np.float32),
+        df_item["log_price_over_floor"].to_numpy(dtype=np.float32),
+        df_item["fraction_cheaper"].to_numpy(dtype=np.float32),
     ], axis=1)
 
     features = torch.tensor(features_np, dtype=torch.float32, device=model.device)
-    features = (features - feature_stats["means"][:5].to(model.device)) / (feature_stats["stds"][:5].to(model.device) + 1e-6)
+    means = feature_stats["means"][:num_auction_features].to(model.device)
+    stds = feature_stats["stds"][:num_auction_features].to(model.device)
+    features = (features - means) / (stds + 1e-6)
 
     item_indices = torch.tensor(df_item["item_index"].to_numpy(), dtype=torch.long, device=model.device)
     contexts     = torch.tensor(df_item["context"].to_numpy(), dtype=torch.long, device=model.device)

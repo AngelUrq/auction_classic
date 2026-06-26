@@ -135,11 +135,20 @@ Training is configured via Hydra (`configs/transformer.yaml`). Key parameters:
 
 | Parameter | Default | Description |
 |-----------|---------|-------------|
-| `d_model` | 256 | Transformer hidden dimension |
+| `d_model` | 128 | Transformer hidden dimension |
 | `nhead` | 16 | Number of attention heads |
-| `num_layers` | 4 | Transformer layers |
+| `num_layers` | 2 | Transformer layers |
+| `input_size` | 6 | Continuous auction features per listing |
+| `n_buyout_ranks` | 16 | Dense price-rank embedding buckets |
 | `n_time_bins` | 48 | Discrete survival time bins |
-| `data.max_hours_back` | 72 | Historical context window (hours) |
+| `data.max_hours_back` | 24 | Historical context window (hours) |
+
+Each listing is described by 6 continuous features — `bid`, `buyout`, `time_left`,
+`listing_age`, and two price-position features relative to the competing listings at
+that snapshot: `log_price_over_floor` (`log(buyout / cheapest)`) and `fraction_cheaper`
+(share of listings strictly cheaper) — plus the categorical `buyout_rank`. The two
+relative features are what give the model its sensitivity to how a price compares to
+the competition; see `src/data/price_features.py`.
 
 ## UI
 

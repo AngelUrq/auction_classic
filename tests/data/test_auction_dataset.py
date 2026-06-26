@@ -11,6 +11,11 @@ import torch
 from data.auction_dataset import AuctionDataset
 
 
+# data.npy column layout (9 columns):
+# [0: bid, 1: buyout, 2: time_left, 3: listing_age, 4: log_price_over_floor,
+#  5: fraction_cheaper, 6: buyout_rank, 7: is_expired, 8: listing_duration]
+
+
 # ---------------------------------------------------------------------------
 # Fixtures / helpers
 # ---------------------------------------------------------------------------
@@ -45,11 +50,11 @@ def _build_auction_dataset(tmp_path, data=None, idx_map=None, pairs=None,
     root.mkdir(exist_ok=True)
 
     if data is None:
-        # columns: bid, buyout, quantity, time_left, listing_age, buyout_rank, is_expired, sold, listing_duration
+        # [bid, buyout, time_left, listing_age, log_price_over_floor, fraction_cheaper, buyout_rank, is_expired, listing_duration]
         data = np.array([
-            [100.0,  1000.0, 1.0, 12.0, 0.0, 0.0, 0.0, 0.0, 24.0],
-            [200.0,  2000.0, 1.0, 48.0, 1.0, 1.0, 0.0, 0.0, 23.0],
-            [ 50.0,   500.0, 2.0,  0.5, 2.0, 0.0, 1.0, 0.0, 22.0],
+            [100.0,  1000.0, 12.0, 0.0, 0.0,  0.00, 0.0, 0.0, 24.0],
+            [200.0,  2000.0, 48.0, 1.0, 0.69, 0.50, 1.0, 0.0, 23.0],
+            [ 50.0,   500.0,  0.5, 2.0, 0.0,  0.00, 0.0, 1.0, 22.0],
         ], dtype=np.float32)
     _write_memmaps(root, data)
 
@@ -76,40 +81,40 @@ def _build_auction_dataset(tmp_path, data=None, idx_map=None, pairs=None,
 # ---------------------------------------------------------------------------
 
 def test_getitem_returns_all_expected_keys(tmp_path):
-    """__getitem__ must return a dict with exactly the 11 documented keys."""
+    """__getitem__ must return a dict with exactly the 13 documented keys (is_sold removed)."""
     ds = _build_auction_dataset(tmp_path)
     sample = ds[0]
     expected_keys = {
         "auction_features", "item_index", "contexts", "bonus_ids",
         "modifier_types", "modifier_values", "hour_of_week", "snapshot_offset",
-        "listing_age", "time_left", "listing_duration", "is_expired", "is_sold", "buyout_rank"
+        "listing_age", "time_left", "listing_duration", "is_expired", "buyout_rank"
     }
     assert set(sample.keys()) == expected_keys
 
 
-def test_auction_features_has_5_columns(tmp_path):
-    """auction_features must have shape (T, 5) — listing_duration is excluded."""
+def test_auction_features_has_6_columns(tmp_path):
+    """auction_features must have shape (T, 6): bid, buyout, time_left, listing_age, log_price_over_floor, fraction_cheaper."""
     ds = _build_auction_dataset(tmp_path)
     sample = ds[0]
-    assert sample["auction_features"].shape[1] == 5
+    assert sample["auction_features"].shape[1] == 6
 
 
 def test_listing_duration_extracted_as_y(tmp_path):
-    """listing_duration tensor must match column 6 of the raw data."""
+    """listing_duration tensor must match the last column of the raw data."""
     data = np.array([
-        [0.0, 0.0, 1.0, 2.0, 0.0, 0.0, 0.0, 0.0, 24.0],
-        [0.0, 0.0, 1.0, 2.0, 0.0, 0.0, 0.0, 0.0, 12.0],
+        [0.0, 0.0, 2.0, 0.0, 0.0, 0.0, 0.0, 0.0, 24.0],
+        [0.0, 0.0, 2.0, 0.0, 0.0, 0.0, 0.0, 0.0, 12.0],
     ], dtype=np.float32)
     ds = _build_auction_dataset(tmp_path, data=data)
     sample = ds[0]
-    expected = torch.tensor([24.0, 12.0])
+    expected = torch.tensor([24, 12])  # listing_duration is returned as int64 (.long())
     torch.testing.assert_close(sample["listing_duration"], expected)
 
 
 def test_log1p_applied_to_bid(tmp_path):
     """The bid column must be log1p-transformed before being returned."""
     data = np.array([
-        [100.0, 1000.0, 1.0, 2.0, 0.0, 0.0, 0.0, 0.0, 5.0],
+        [100.0, 1000.0, 2.0, 0.0, 0.0, 0.0, 0.0, 0.0, 5.0],
     ], dtype=np.float32)
     ds = _build_auction_dataset(tmp_path, data=data)
     sample = ds[0]
@@ -120,7 +125,7 @@ def test_log1p_applied_to_bid(tmp_path):
 def test_log1p_applied_to_buyout(tmp_path):
     """The buyout column must be log1p-transformed before being returned."""
     data = np.array([
-        [0.0, 500.0, 1.0, 2.0, 0.0, 0.0, 0.0, 0.0, 5.0],
+        [0.0, 500.0, 2.0, 0.0, 0.0, 0.0, 0.0, 0.0, 5.0],
     ], dtype=np.float32)
     ds = _build_auction_dataset(tmp_path, data=data)
     sample = ds[0]
@@ -128,11 +133,33 @@ def test_log1p_applied_to_buyout(tmp_path):
     assert sample["auction_features"][0, 1].item() == pytest.approx(expected_buyout, rel=1e-5)
 
 
+def test_relative_price_features_passthrough(tmp_path):
+    """log_price_over_floor (col 4) and fraction_cheaper (col 5) must pass through unchanged (no log1p) when feature_stats is None."""
+    data = np.array([
+        [0.0, 0.0, 2.0, 0.0, 0.69, 0.25, 0.0, 0.0, 5.0],
+    ], dtype=np.float32)
+    ds = _build_auction_dataset(tmp_path, data=data, feature_stats=None)
+    sample = ds[0]
+    assert sample["auction_features"][0, 4].item() == pytest.approx(0.69, rel=1e-5)
+    assert sample["auction_features"][0, 5].item() == pytest.approx(0.25, rel=1e-5)
+
+
+def test_buyout_rank_extracted_from_column_6(tmp_path):
+    """buyout_rank tensor must be read from column 6 of the raw data."""
+    data = np.array([
+        [0.0, 0.0, 2.0, 0.0, 0.0, 0.0, 3.0, 0.0, 5.0],
+        [0.0, 0.0, 2.0, 0.0, 0.0, 0.0, 0.0, 0.0, 5.0],
+    ], dtype=np.float32)
+    ds = _build_auction_dataset(tmp_path, data=data)
+    sample = ds[0]
+    torch.testing.assert_close(sample["buyout_rank"], torch.tensor([3, 0]))
+
+
 def test_log1p_applied_to_modifier_values(tmp_path):
     """Modifier values must be log1p-transformed before being returned."""
     root = tmp_path / "memmap"
     root.mkdir(exist_ok=True)
-    data = np.array([[0.0, 0.0, 1.0, 2.0, 0.0, 0.0, 0.0, 0.0, 5.0]], dtype=np.float32)
+    data = np.array([[0.0, 0.0, 2.0, 0.0, 0.0, 0.0, 0.0, 0.0, 5.0]], dtype=np.float32)
     mod_vals = np.zeros((1, 11), dtype=np.float32)
     mod_vals[0, 0] = 99.0
     _write_memmaps(root, data, modifier_values=mod_vals)
@@ -149,10 +176,10 @@ def test_log1p_applied_to_modifier_values(tmp_path):
 
 def test_normalization_applied_when_feature_stats_given(tmp_path):
     """When feature_stats is provided, auction_features must be (x - mean) / (std + 1e-6) normalised."""
-    data = np.array([[10.0, 100.0, 1.0, 2.0, 3.0, 0.0, 0.0, 0.0, 5.0]], dtype=np.float32)
+    data = np.array([[10.0, 100.0, 2.0, 3.0, 0.0, 0.0, 0.0, 0.0, 5.0]], dtype=np.float32)
     feature_stats = {
-        "means": torch.zeros(5),
-        "stds": torch.ones(5),
+        "means": torch.zeros(6),
+        "stds": torch.ones(6),
         "modifiers_mean": torch.tensor(0.0),
         "modifiers_std": torch.tensor(1.0),
     }
@@ -164,7 +191,7 @@ def test_normalization_applied_when_feature_stats_given(tmp_path):
 
 def test_no_normalization_when_feature_stats_none(tmp_path):
     """When feature_stats is None, auction_features must only have log1p applied."""
-    data = np.array([[10.0, 100.0, 1.0, 2.0, 3.0, 0.0, 0.0, 0.0, 5.0]], dtype=np.float32)
+    data = np.array([[10.0, 100.0, 2.0, 3.0, 0.0, 0.0, 0.0, 0.0, 5.0]], dtype=np.float32)
     ds = _build_auction_dataset(tmp_path, data=data, feature_stats=None)
     sample = ds[0]
     expected_bid = float(np.log1p(10.0))
@@ -208,25 +235,14 @@ def test_missing_key_raises_keyerror(tmp_path):
     with pytest.raises(KeyError):
         _ = ds[1]
 
+
 def test_is_expired_extracted_correctly(tmp_path):
-    """is_expired tensor must correctly match the column indices"""
+    """is_expired tensor must be read from column 7 of the raw data."""
     data = np.array([
-        [0.0, 0.0, 1.0, 2.0, 0.0, 0.0, 1.0, 0.0, 24.0],
-        [0.0, 0.0, 1.0, 2.0, 0.0, 0.0, 0.0, 0.0, 12.0],
+        [0.0, 0.0, 2.0, 0.0, 0.0, 0.0, 0.0, 1.0, 24.0],
+        [0.0, 0.0, 2.0, 0.0, 0.0, 0.0, 0.0, 0.0, 12.0],
     ], dtype=np.float32)
     ds = _build_auction_dataset(tmp_path, data=data)
     sample = ds[0]
     expected = torch.tensor([1.0, 0.0])
     torch.testing.assert_close(sample["is_expired"], expected)
-
-
-def test_is_sold_extracted_correctly(tmp_path):
-    """sold tensor must correctly match the column indices"""
-    data = np.array([
-        [0.0, 0.0, 1.0, 2.0, 0.0, 0.0, 0.0, 1.0, 24.0],
-        [0.0, 0.0, 1.0, 2.0, 0.0, 0.0, 0.0, 0.0, 12.0],
-    ], dtype=np.float32)
-    ds = _build_auction_dataset(tmp_path, data=data)
-    sample = ds[0]
-    expected = torch.tensor([1.0, 0.0])
-    torch.testing.assert_close(sample["is_sold"], expected)

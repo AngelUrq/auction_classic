@@ -30,17 +30,20 @@ class AuctionDataset(Dataset):
         self.feature_stats = feature_stats
         self.max_hours_back = int(max_hours_back)
 
+        # data.npy layout (9 columns). The first 6 are the continuous model
+        # features (auction_features); the rest are the categorical rank and labels.
         self.column_map = {
             "bid": 0,
             "buyout": 1,
-            "quantity": 2,
-            "time_left": 3,
-            "listing_age": 4,
-            "buyout_rank": 5,
-            "is_expired": 6,
-            "is_sold": 7,
+            "time_left": 2,
+            "listing_age": 3,
+            "log_price_over_floor": 4,
+            "fraction_cheaper": 5,
+            "buyout_rank": 6,
+            "is_expired": 7,
             "listing_duration": 8,
         }
+        self.num_auction_features = 6
 
         if memmap_arrays is not None:
             self.data = memmap_arrays["data"]
@@ -127,8 +130,12 @@ class AuctionDataset(Dataset):
 
         listing_duration = auction_features[:, self.column_map["listing_duration"]].long()
         buyout_rank = auction_features[:, self.column_map["buyout_rank"]].long()
-        auction_features = auction_features[:, :5]  # bid, buyout, qty, time_left, listing_age
+        # Continuous model features: bid, buyout, time_left, listing_age,
+        # log_price_over_floor, fraction_cheaper.
+        auction_features = auction_features[:, :self.num_auction_features]
 
+        # Only bid and buyout are raw magnitudes needing a log; log_price_over_floor
+        # is already a log-ratio and fraction_cheaper is already in [0, 1).
         auction_features[:, self.column_map["bid"]] = torch.log1p(
             auction_features[:, self.column_map["bid"]]
         )
@@ -141,8 +148,8 @@ class AuctionDataset(Dataset):
         time_left = auction_features[:, self.column_map["time_left"]].clone()
 
         if self.feature_stats is not None:
-            means = self.feature_stats["means"][:5].float()
-            stds = self.feature_stats["stds"][:5].float()
+            means = self.feature_stats["means"][:self.num_auction_features].float()
+            stds = self.feature_stats["stds"][:self.num_auction_features].float()
             auction_features = (auction_features - means) / (stds + 1e-6)
 
             mod_mean = self.feature_stats["modifiers_mean"].float()
@@ -156,9 +163,6 @@ class AuctionDataset(Dataset):
         y = listing_duration
         is_expired_arr = auction_features_np[:, self.column_map["is_expired"]]
         is_expired_tensor = torch.tensor(is_expired_arr, dtype=torch.float32)
-        
-        is_sold_arr = auction_features_np[:, self.column_map["is_sold"]]
-        is_sold_tensor = torch.tensor(is_sold_arr, dtype=torch.float32)
 
         return {
             "auction_features": auction_features,
@@ -174,5 +178,4 @@ class AuctionDataset(Dataset):
             "time_left": time_left,
             "listing_duration": y,
             "is_expired": is_expired_tensor,
-            "is_sold": is_sold_tensor,
         }

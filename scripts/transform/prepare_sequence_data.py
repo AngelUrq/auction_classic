@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-import os, json, time
+import os, json, time, sys
 import argparse
 import numpy as np
 import pandas as pd
@@ -7,7 +7,11 @@ import h5py
 from datetime import datetime
 import gc
 from collections import defaultdict, OrderedDict
+from pathlib import Path
 from tqdm import tqdm
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from src.data.price_features import compute_relative_price_features
 
 TIME_LEFT_TO_INT = {
     'VERY_LONG': 48.0,
@@ -36,8 +40,6 @@ data_end_date = datetime(2026, 6, 13)
 def is_expired(listing_duration, time_left):
     return 1.0 if (float(listing_duration) in EXPIRED_LISTING_DURATIONS and float(time_left) <= 0.5) else 0.0
 
-def is_sold(buyout_rank, is_expired_val):
-    return 1.0 if (float(buyout_rank) == 0.0 and float(is_expired_val) == 0.0) else 0.0
 
 def pad_or_truncate_bonuses(bonus_ids, bonus_to_idx):
     mapped = [int(bonus_to_idx[str(b)]) for b in bonus_ids][:MAX_BONUSES]
@@ -174,7 +176,6 @@ def process_auctions(args):
                 bid = float(auction.get('bid', 0)) / 10000.0
                 buyout = float(auction.get('buyout', 0)) / 10000.0
                 time_left = float(TIME_LEFT_TO_INT[auction['time_left']])
-                quantity = float(auction['quantity'])
                 context = int(context_to_idx[str(auction['item'].get('context', 0))])
 
                 bonus_arr = pad_or_truncate_bonuses(auction['item'].get('bonus_lists', []), bonus_to_idx)
@@ -189,28 +190,19 @@ def process_auctions(args):
                 last_time_left_str = timestamps[auction_id]['last_time_left']
                 final_time_left_val = float(TIME_LEFT_TO_INT[last_time_left_str])
                 
-                # Check 1: Did it expire naturally?
+                # Did it expire naturally? The survival event indicator used by the
+                # model is (1 - is_expired); a separate sold flag is not stored.
                 is_expired_val = is_expired(listing_duration, final_time_left_val)
-                
-                # Check 2: Was its FINAL state sold? 
-                # (Rank 0 at disappearance, and didn't expire naturally, and time_left > 2.0)
-                final_buyout_rank = float(timestamps[auction_id].get('last_buyout_rank', 1.0))
-                
-                if is_expired_val == 0.0 and final_buyout_rank == 0.0 and final_time_left_val > 2.0:
-                    is_sold_val = 1.0
-                else:
-                    is_sold_val = 0.0
 
-                row_data = np.array([bid, buyout, quantity, time_left, listing_age, is_expired_val, listing_duration], dtype=np.float32)
+                row_data = np.array([bid, buyout, time_left, listing_age, is_expired_val, listing_duration], dtype=np.float32)
 
                 if item_index not in auctions_by_item:
                     auctions_by_item[item_index] = {
-                        'data': [], 'contexts': [], 'auction_ids': [], 'is_sold_vals': [],
+                        'data': [], 'contexts': [], 'auction_ids': [],
                         'bonus_ids': [], 'modifier_types': [], 'modifier_values': []
                     }
 
                 auctions_by_item[item_index]['auction_ids'].append(auction_id)
-                auctions_by_item[item_index]['is_sold_vals'].append(is_sold_val)
                 auctions_by_item[item_index]['data'].append(row_data)
                 auctions_by_item[item_index]['contexts'].append(context)
                 auctions_by_item[item_index]['bonus_ids'].append(bonus_arr)
@@ -223,7 +215,6 @@ def process_auctions(args):
                 bonus_ids_h = np.vstack(pack['bonus_ids']).astype(np.int32, copy=False)
                 modifier_types_h = np.vstack(pack['modifier_types']).astype(np.int32, copy=False)
                 modifier_values_h = np.vstack(pack['modifier_values']).astype(np.float32, copy=False)
-                is_sold_vals_h = np.asarray(pack['is_sold_vals'], dtype=np.float32)
 
                 if data_h.shape[0] > MAX_SEQUENCE_LENGTH:
                     print(f'Capping {data_h.shape[0]} from item {item_index} to {MAX_SEQUENCE_LENGTH}')
@@ -232,23 +223,28 @@ def process_auctions(args):
                     bonus_ids_h = bonus_ids_h[:MAX_SEQUENCE_LENGTH]
                     modifier_types_h = modifier_types_h[:MAX_SEQUENCE_LENGTH]
                     modifier_values_h = modifier_values_h[:MAX_SEQUENCE_LENGTH]
-                    is_sold_vals_h = is_sold_vals_h[:MAX_SEQUENCE_LENGTH]
 
-                # Compute buyout_rank for THIS snapshot (as a feature for the model)
+                # Compute price-position features for THIS snapshot (model features).
+                # row_data layout here: [0: bid, 1: buyout, 2: time_left, 3: listing_age, 4: is_expired, 5: listing_duration]
                 buyout_col = data_h[:, 1]
                 unique_sorted = np.sort(np.unique(buyout_col))
                 buyout_rank = np.searchsorted(unique_sorted, buyout_col).astype(np.float32)
-                
-                # Combine features
-                # [0: bid, 1: buyout, 2: quantity, 3: time_left, 4: listing_age, 5: buyout_rank, 6: is_expired, 7: listing_duration]
-                data_h = np.column_stack([data_h[:, :5], buyout_rank, data_h[:, 5:]])  # (N, 8)
+                log_price_over_floor, fraction_cheaper = compute_relative_price_features(buyout_col)
 
-                # insert global is_sold label before listing_duration to keep target at the end
-                # [0: bid, 1: buyout, ... 5: rank, 6: is_expired, 7: is_sold, 8: duration]
-                data_h = np.column_stack([data_h[:, :7], is_sold_vals_h, data_h[:, 7:]]) # (N, 9)
+                # Assemble the final per-row feature layout (N, 9):
+                # [0: bid, 1: buyout, 2: time_left, 3: listing_age, 4: log_price_over_floor,
+                #  5: fraction_cheaper, 6: buyout_rank, 7: is_expired, 8: listing_duration]
+                data_h = np.column_stack([
+                    data_h[:, :4],              # bid, buyout, time_left, listing_age
+                    log_price_over_floor,
+                    fraction_cheaper,
+                    buyout_rank,
+                    data_h[:, 4],               # is_expired
+                    data_h[:, 5],               # listing_duration
+                ])
 
                 item_listing_duration = data_h[:, 8]
-                item_listing_age = data_h[:, 4]
+                item_listing_age = data_h[:, 3]
                 stats_tuple = (
                     int(len(item_listing_duration)),
                     float(np.mean(item_listing_duration)), float(np.std(item_listing_duration)),
