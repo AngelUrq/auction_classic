@@ -19,9 +19,15 @@ dependencies = [
     "scikit-learn>=1.5.2",
     "scikit-survival>=0.23.1",
     "seaborn>=0.13.2",
+    "streamlit>=1.40.0",
     "torch>=2.8.0",
     "torch-tb-profiler>=0.4.3",
     "torchsurv>=0.1.6",
     "tqdm>=4.67.3",
     "wandb>=0.25.1",
+]
+
+[dependency-groups]
+dev = [
+    "ipykernel>=7.3.0",
 ]

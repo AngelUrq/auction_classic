@@ -34,7 +34,7 @@ exclude_first_times = [
     '28-05-2026',
 ]
 # Exclude the last 2 days: auctions listed that recently can't have a known listing_duration yet.
-data_end_date = datetime(2026, 6, 13)
+data_end_date = datetime(2026, 6, 24)
 
 
 def is_expired(listing_duration, time_left):
