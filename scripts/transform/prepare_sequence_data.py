@@ -34,11 +34,21 @@ exclude_first_times = [
     '28-05-2026',
 ]
 # Exclude the last 2 days: auctions listed that recently can't have a known listing_duration yet.
-data_end_date = datetime(2026, 6, 24)
+data_end_date = datetime(2026, 7, 16)
 
 
 def is_expired(listing_duration, time_left):
     return 1.0 if (float(listing_duration) in EXPIRED_LISTING_DURATIONS and float(time_left) <= 0.5) else 0.0
+
+
+def is_sold(last_buyout_rank, time_left):
+    # High-precision proxy: the auction left the book while it was still the
+    # cheapest listing (rank 0) AND had plenty of time left (LONG/VERY_LONG),
+    # so it could not have naturally expired and a rank-0 seller had no reason
+    # to cancel-relist. MEDIUM/SHORT are excluded (near end-of-life: 96% of
+    # rank-0-MEDIUM rows are full-cycle expiries/cancels, not sales).
+    # is_sold and is_expired are mutually exclusive; both 0 => ambiguous/censored.
+    return 1.0 if (float(last_buyout_rank) == 0.0 and float(time_left) > 2.0) else 0.0
 
 
 def pad_or_truncate_bonuses(bonus_ids, bonus_to_idx):
@@ -66,7 +76,7 @@ def _check_item_datasets(h5_file, item_id_str):
     grp = grp_root.require_group(item_id_str)
 
     if 'data' not in grp:
-        grp.create_dataset('data', shape=(0, 9), maxshape=(None, 9), dtype='float32', chunks=(ROW_CHUNK, 9))
+        grp.create_dataset('data', shape=(0, 10), maxshape=(None, 10), dtype='float32', chunks=(ROW_CHUNK, 10))
     if 'contexts' not in grp:
         grp.create_dataset('contexts', shape=(0,), maxshape=(None,), dtype='int32', chunks=(ROW_CHUNK,))
     if 'bonus_ids' not in grp:
@@ -84,7 +94,7 @@ def _append_item_block(grp, data_h, contexts_h, bonus_ids_h, modifier_types_h, m
     old = grp['data'].shape[0]
     new = old + n
 
-    grp['data'].resize((new, 9))
+    grp['data'].resize((new, 10))
     grp['contexts'].resize((new,))
     grp['bonus_ids'].resize((new, MAX_BONUSES))
     grp['modifier_types'].resize((new, MAX_MODIFIERS))
@@ -190,11 +200,13 @@ def process_auctions(args):
                 last_time_left_str = timestamps[auction_id]['last_time_left']
                 final_time_left_val = float(TIME_LEFT_TO_INT[last_time_left_str])
                 
-                # Did it expire naturally? The survival event indicator used by the
-                # model is (1 - is_expired); a separate sold flag is not stored.
+                # Terminal outcome labels. The survival event is is_sold; is_expired
+                # is retained as the clean negative (both 0 => ambiguous/censored).
+                last_buyout_rank = float(timestamps[auction_id].get('last_buyout_rank', 1.0))
                 is_expired_val = is_expired(listing_duration, final_time_left_val)
+                is_sold_val = is_sold(last_buyout_rank, final_time_left_val)
 
-                row_data = np.array([bid, buyout, time_left, listing_age, is_expired_val, listing_duration], dtype=np.float32)
+                row_data = np.array([bid, buyout, time_left, listing_age, is_expired_val, listing_duration, is_sold_val], dtype=np.float32)
 
                 if item_index not in auctions_by_item:
                     auctions_by_item[item_index] = {
@@ -225,15 +237,16 @@ def process_auctions(args):
                     modifier_values_h = modifier_values_h[:MAX_SEQUENCE_LENGTH]
 
                 # Compute price-position features for THIS snapshot (model features).
-                # row_data layout here: [0: bid, 1: buyout, 2: time_left, 3: listing_age, 4: is_expired, 5: listing_duration]
+                # row_data layout here: [0: bid, 1: buyout, 2: time_left, 3: listing_age,
+                #  4: is_expired, 5: listing_duration, 6: is_sold]
                 buyout_col = data_h[:, 1]
                 unique_sorted = np.sort(np.unique(buyout_col))
                 buyout_rank = np.searchsorted(unique_sorted, buyout_col).astype(np.float32)
                 log_price_over_floor, fraction_cheaper = compute_relative_price_features(buyout_col)
 
-                # Assemble the final per-row feature layout (N, 9):
+                # Assemble the final per-row feature layout (N, 10):
                 # [0: bid, 1: buyout, 2: time_left, 3: listing_age, 4: log_price_over_floor,
-                #  5: fraction_cheaper, 6: buyout_rank, 7: is_expired, 8: listing_duration]
+                #  5: fraction_cheaper, 6: buyout_rank, 7: is_expired, 8: listing_duration, 9: is_sold]
                 data_h = np.column_stack([
                     data_h[:, :4],              # bid, buyout, time_left, listing_age
                     log_price_over_floor,
@@ -241,6 +254,7 @@ def process_auctions(args):
                     buyout_rank,
                     data_h[:, 4],               # is_expired
                     data_h[:, 5],               # listing_duration
+                    data_h[:, 6],               # is_sold
                 ])
 
                 item_listing_duration = data_h[:, 8]

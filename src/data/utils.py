@@ -57,6 +57,7 @@ def collate_auctions(batch, max_sequence_length=None, pad_value=0):
     snapshot_offset  = _crop_and_pad([b['snapshot_offset']    for b in batch], L, pad_value)
     listing_duration = _crop_and_pad([b['listing_duration']   for b in batch], L, pad_value)
     is_expired       = _crop_and_pad([b['is_expired']         for b in batch], L, pad_value)
+    is_sold          = _crop_and_pad([b['is_sold']            for b in batch], L, pad_value)
 
     return {
         'auction_features': auction_features,    # (B, T_max, 6)
@@ -72,6 +73,7 @@ def collate_auctions(batch, max_sequence_length=None, pad_value=0):
         'snapshot_offset': snapshot_offset,
         'listing_duration': listing_duration,
         'is_expired': is_expired,
+        'is_sold': is_sold,
     }
 
 
@@ -275,17 +277,21 @@ def load_auctions_from_sample(
         df_auctions['fraction_cheaper'] = fraction_cheaper
 
         if include_targets:
-            # We determine the final status by grabbing the last snapshot of each auction 
+            # We determine the final status by grabbing the last snapshot of each auction
             last_rows = df_auctions.groupby('id').last()
 
-            # Did it expire naturally? The survival event indicator used by the
-            # model is (1 - is_expired).
+            # Terminal labels, matching prepare_sequence_data.py exactly. The survival
+            # event is is_sold (cheapest at last sighting AND still LONG/VERY_LONG);
+            # is_expired is the clean negative (both 0 => ambiguous/censored).
             is_expired_s = ((last_rows['listing_duration'].isin([11.0, 23.0, 47.0])) & (last_rows['time_left'] <= 0.5)).astype(float)
+            is_sold_s = ((last_rows['buyout_rank'] == 0) & (last_rows['time_left'] > 2.0)).astype(float)
 
             # Map the exact same final status back to all snapshots for that auction id
             df_auctions['is_expired'] = df_auctions['id'].map(is_expired_s)
+            df_auctions['is_sold'] = df_auctions['id'].map(is_sold_s)
         else:
             df_auctions['is_expired'] = 0.0
+            df_auctions['is_sold'] = 0.0
 
         # Drop snapshots older than the caller needs. The full past window is still
         # read in pass 1 so listing_age/buyout_rank stay accurate; we only discard the
@@ -311,6 +317,7 @@ def load_auctions_from_sample(
             'fraction_cheaper': 'float32',
             'listing_duration': 'float32',
             'is_expired': 'float32',
+            'is_sold': 'float32',
         }
         for column, dtype in downcast_dtypes.items():
             if column in df_auctions.columns:

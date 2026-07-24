@@ -36,9 +36,9 @@ from src.models.auction_transformer import AuctionTransformer
 
 def load_memmap_arrays_into_ram(root: str) -> dict:
     data_mm = np.memmap(root + "/data.npy", mode="r", dtype=np.float32)
-    total_rows = data_mm.size // 9
+    total_rows = data_mm.size // 10
     return {
-        "data": np.array(data_mm.reshape((total_rows, 9))),
+        "data": np.array(data_mm.reshape((total_rows, 10))),
         "contexts": np.array(np.memmap(root + "/contexts.npy", mode="r", dtype=np.int32)),
         "bonus_ids": np.array(np.memmap(root + "/bonus_ids.npy", mode="r", dtype=np.int32).reshape((total_rows, 9))),
         "modifier_types": np.array(np.memmap(root + "/modifier_types.npy", mode="r", dtype=np.int32).reshape((total_rows, 11))),

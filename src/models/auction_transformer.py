@@ -209,7 +209,7 @@ class AuctionTransformer(L.LightningModule):
         survival_logits = self.survival_head(X)                                        # (B,S,n_time_bins)
         return survival_logits
 
-    def _compute_survival_loss(self, survival_logits, listing_duration, is_expired, item_index, snapshot_offset):
+    def _compute_survival_loss(self, survival_logits, listing_duration, is_sold, item_index, snapshot_offset):
         """Compute combined NLL and ranking survival loss over valid positions.
 
         Loss = nll_weight * NLL + rank_weight * ranking_loss.
@@ -217,7 +217,8 @@ class AuctionTransformer(L.LightningModule):
         Args:
             survival_logits: Raw logits from survival head (B, S, n_time_bins)
             listing_duration: Duration in hours, 0-47 (B, S)
-            is_expired: 1 if auction expired (censored), 0 if sold (event) (B, S)
+            is_sold: 1 if the auction sold (event), 0 if censored — expired or
+                ambiguous (B, S). Censoring is handled via listing_duration.
             item_index: Item indices for masking padding (B, S)
             snapshot_offset: Snapshot offset for selecting current auctions (B, S)
 
@@ -232,7 +233,7 @@ class AuctionTransformer(L.LightningModule):
 
         logits = survival_logits[valid_mask]          # (N, n_time_bins)
         durations = listing_duration[valid_mask]       # (N,)
-        events = 1.0 - is_expired[valid_mask].float()  # sold=1, expired=0
+        events = is_sold[valid_mask].float()           # sold=1, censored=0
 
         nll = self.hazard_survival_loss(logits, durations, events)
 
@@ -277,7 +278,7 @@ class AuctionTransformer(L.LightningModule):
         ))
 
         loss, nll, rank = self._compute_survival_loss(
-            survival_logits, batch['listing_duration'], batch['is_expired'],
+            survival_logits, batch['listing_duration'], batch['is_sold'],
             batch['item_index'], batch['snapshot_offset']
         )
 
@@ -310,7 +311,7 @@ class AuctionTransformer(L.LightningModule):
         sale_prob = pmf.sum(dim=-1).clamp_min(1e-6)
         return (pmf * time_bins).sum(dim=-1) / sale_prob
 
-    def _accumulate_validation_predictions(self, survival_logits, listing_duration, is_expired, item_index, snapshot_offset, time_left, listing_age):
+    def _accumulate_validation_predictions(self, survival_logits, listing_duration, is_sold, item_index, snapshot_offset, time_left, listing_age):
         """Accumulate predictions and targets for epoch-level metric computation."""
         valid_mask = (item_index != 0) & (snapshot_offset == 0)
 
@@ -324,7 +325,7 @@ class AuctionTransformer(L.LightningModule):
         self._val_expected_durations.append(expected_duration.detach())
         self._val_predicted_pmfs.append(pmf.detach())
         self._val_observed_durations.append(listing_duration[valid_mask].detach())
-        self._val_events.append((is_expired[valid_mask] == 0).detach())
+        self._val_events.append((is_sold[valid_mask] == 1).detach())
         self._val_time_left.append(time_left[valid_mask].detach())
         self._val_listing_age.append(listing_age[valid_mask].detach())
 
@@ -352,12 +353,12 @@ class AuctionTransformer(L.LightningModule):
         ))
 
         loss, nll, rank = self._compute_survival_loss(
-            survival_logits, batch['listing_duration'], batch['is_expired'],
+            survival_logits, batch['listing_duration'], batch['is_sold'],
             batch['item_index'], batch['snapshot_offset']
         )
 
         self._accumulate_validation_predictions(
-            survival_logits, batch['listing_duration'], batch['is_expired'],
+            survival_logits, batch['listing_duration'], batch['is_sold'],
             batch['item_index'], batch['snapshot_offset'],
             batch['time_left'], batch['listing_age']
         )

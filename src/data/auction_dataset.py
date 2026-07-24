@@ -30,7 +30,7 @@ class AuctionDataset(Dataset):
         self.feature_stats = feature_stats
         self.max_hours_back = int(max_hours_back)
 
-        # data.npy layout (9 columns). The first 6 are the continuous model
+        # data.npy layout (10 columns). The first 6 are the continuous model
         # features (auction_features); the rest are the categorical rank and labels.
         self.column_map = {
             "bid": 0,
@@ -42,6 +42,7 @@ class AuctionDataset(Dataset):
             "buyout_rank": 6,
             "is_expired": 7,
             "listing_duration": 8,
+            "is_sold": 9,
         }
         self.num_auction_features = 6
 
@@ -53,8 +54,8 @@ class AuctionDataset(Dataset):
             self.modifier_values = memmap_arrays["modifier_values"]
         else:
             data_mm = np.memmap(os.path.join(root, "data.npy"), mode="r", dtype=np.float32)
-            total_rows = data_mm.size // 9
-            self.data = data_mm.reshape((total_rows, 9))
+            total_rows = data_mm.size // 10
+            self.data = data_mm.reshape((total_rows, 10))
             self.contexts = np.memmap(
                 os.path.join(root, "contexts.npy"), mode="r", dtype=np.int32
             )
@@ -163,6 +164,8 @@ class AuctionDataset(Dataset):
         y = listing_duration
         is_expired_arr = auction_features_np[:, self.column_map["is_expired"]]
         is_expired_tensor = torch.tensor(is_expired_arr, dtype=torch.float32)
+        is_sold_arr = auction_features_np[:, self.column_map["is_sold"]]
+        is_sold_tensor = torch.tensor(is_sold_arr, dtype=torch.float32)
 
         return {
             "auction_features": auction_features,
@@ -178,4 +181,5 @@ class AuctionDataset(Dataset):
             "time_left": time_left,
             "listing_duration": y,
             "is_expired": is_expired_tensor,
+            "is_sold": is_sold_tensor,
         }
