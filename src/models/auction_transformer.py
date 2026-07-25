@@ -367,22 +367,29 @@ class AuctionTransformer(L.LightningModule):
         return loss
 
     def _compute_segmented_mae(self, expected_durations, observed_durations, events, time_left, listing_age):
-        """Compute MAE for different auction segments.
+        """Compute sale-timing MAE for different auction segments.
 
-        Segments:
-            - mae: all auctions
-            - mae_48h: 48h auctions
-            - mae_fresh: 48h auctions with listing_age == 0
-            - mae_young: 48h auctions with listing_age <= 12
+        Restricted to sold auctions (events == 1): expected_duration is the median sale
+        time conditional on selling, so it is only comparable to observed_duration for
+        auctions where the disappearance WAS a sale. For censored rows (expired/ambiguous)
+        observed_duration is a disappearance time, not a sale time, so including them would
+        measure nothing. This mirrors the event-masking already done for C-index and
+        calibration.
+
+        Segments (all intersected with sold):
+            - mae: all sold auctions
+            - mae_48h: sold 48h auctions
+            - mae_fresh: sold 48h auctions with listing_age == 0
+            - mae_young: sold 48h auctions with listing_age <= 12
         """
         is_48h = time_left == 48
-        all_auctions = torch.ones_like(events)
+        sold = events.bool()
 
         segments = {
-            'val/mae': all_auctions,
-            'val/mae_48h': is_48h,
-            'val/mae_fresh': is_48h & (listing_age == 0),
-            'val/mae_young': is_48h & (listing_age <= 12),
+            'val/mae': sold,
+            'val/mae_48h': sold & is_48h,
+            'val/mae_fresh': sold & is_48h & (listing_age == 0),
+            'val/mae_young': sold & is_48h & (listing_age <= 12),
         }
 
         for name, mask in segments.items():
