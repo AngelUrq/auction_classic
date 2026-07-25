@@ -15,7 +15,7 @@ wd = Path(__file__).parent.parent.resolve()
 sys.path.append(str(wd))
 
 from tqdm import tqdm
-from src.models.inference import predict_dataframe
+from src.models.inference import predict_dataframe, load_sale_calibrator
 from src.data.utils import load_auctions_from_sample
 from src.data.price_features import relative_price_features_for_candidate
 from src.models.auction_transformer import AuctionTransformer
@@ -26,11 +26,16 @@ model = None
 feature_stats = None
 prediction_time = None
 recommendations = None
-ckpt_path = './models/transformer-812.6K-survival_24-lr3e-05-bs128/last.ckpt'
+sale_calibrator = None   # callable P(sold) -> calibrated, loaded from generated/sale_calibrator.pkl if present
+ckpt_path = './models/transformer-815.7K-survival_24-lr3e-05-bs128/last.ckpt'
 max_hours_back = 24
 max_sequence_length = 1024
 max_display_offset = 24  # Current Auctions slider tops out here; drop older snapshots
 sold_threshold = 8
+
+# The survival event is is_sold (a genuine sale: the cheapest listing that left the book while still
+# LONG/VERY_LONG — not an expiry or cancel). predict_dataframe's sale_probability defaults to
+# P(sold ever) = 1 - S(T_max) ("will it sell at all") when quick_sale_threshold_hours is left None.
 
 item_to_idx = None
 context_to_idx = None
@@ -126,7 +131,7 @@ def _start_background_reload(reload_minute=3):
 
 
 def load_data_and_model():
-    global model_loaded, model, feature_stats
+    global model_loaded, model, feature_stats, sale_calibrator
     global item_to_idx, context_to_idx, bonus_to_idx, modtype_to_idx, idx_to_item
 
     if model_loaded:
@@ -157,6 +162,10 @@ def load_data_and_model():
     model.eval()
     print('Pre-trained Transformer model loaded successfully.')
 
+    sale_calibrator = load_sale_calibrator()
+    print('Sale-probability calibrator loaded.' if sale_calibrator is not None
+          else 'No sale-probability calibrator found; serving raw P(sold).')
+
     _reload_data()
     model_loaded = True
     return "Model and data loaded successfully!"
@@ -168,10 +177,15 @@ def generate_recommendations(min_profit, min_sale_probability, hold_horizon_hour
 
     For each item we buy the cheapest listing and relist just under the next-cheapest
     competitor, so our relisting becomes the cheapest (buyout_rank 0). The model scores
-    that exact counterfactual listing and predicts the probability it sells within the
-    hold horizon. We keep flips whose post-fee margin and sale probability clear the
+    that exact counterfactual listing and predicts the probability it makes a genuine sale
+    (is_sold) within the hold horizon — the flip operating region the is_sold label was
+    built for. We keep flips whose post-fee margin and sale probability clear the
     thresholds, then rank by expected value (margin x sale_probability), breaking ties
     toward faster expected sales (capital velocity).
+
+    Note: predict_dataframe post-hoc calibrates sale_probability against the is_sold proxy when
+    generated/sale_calibrator.pkl exists (raw output otherwise). The calibrator is fit on the proxy,
+    not real sales yet, so read expected_value as a ranking rather than a literal profit figure.
     """
     global model_loaded
 
@@ -184,6 +198,7 @@ def generate_recommendations(min_profit, min_sale_probability, hold_horizon_hour
     pred_time = prediction_time
     mdl = model
     stats = feature_stats
+    cal = sale_calibrator
 
     df_now = df[df["snapshot_offset"] == 0].copy()
     if df_now.empty:
@@ -246,6 +261,7 @@ def generate_recommendations(min_profit, min_sale_probability, hold_horizon_hour
             max_hours_back=max_hours_back,
             max_sequence_length=max_sequence_length,
             quick_sale_threshold_hours=hold_horizon_hours,
+            calibrator=cal,
         )
         if prediction_df.empty:
             continue
@@ -377,7 +393,8 @@ def create_ui():
                     pred_time,
                     stats,
                     max_hours_back=max_hours_back,
-                    max_sequence_length=max_sequence_length
+                    max_sequence_length=max_sequence_length,
+                    calibrator=sale_calibrator,
                 )
 
                 prediction_results = prediction_results[prediction_results['snapshot_offset'] == 0]
@@ -440,21 +457,27 @@ def create_ui():
             gr.Markdown(
                 "**Become-the-cheapest** strategy: buy the cheapest listing, then relist just under the "
                 "next-cheapest competitor so your auction is the cheapest. The model scores that exact "
-                "relisting and predicts how likely it is to **sell within your hold horizon**. Flips are "
-                "ranked by **expected value** (post-fee margin × sale probability)."
+                "relisting and predicts how likely it is to make a **genuine sale (is_sold)** within your "
+                "hold horizon. Flips are ranked by **expected value** (post-fee margin × sale probability)."
+            )
+            gr.Markdown(
+                "**sale_probability is post-hoc calibrated** against the is_sold proxy when "
+                "`generated/sale_calibrator.pkl` is present (otherwise it's the raw, optimistic model "
+                "output). It's calibrated to a proxy, not real sales yet, so still read expected_value "
+                "as a ranking more than a literal profit figure."
             )
             gr.Markdown("**Columns:**")
             gr.Markdown("- **buyout**: cost to buy the current cheapest listing")
             gr.Markdown("- **next_cheapest / relist_price**: the competitor you undercut, and your resulting price")
             gr.Markdown(f"- **margin**: profit after the {int(AH_CUT * 100)}% AH cut if it sells (relist_price × {1 - AH_CUT:g} − buyout)")
-            gr.Markdown("- **sale_probability**: model P(sells within the hold horizon)")
+            gr.Markdown("- **sale_probability**: model P(genuine sale within the hold horizon; horizon = 48h ⇒ will it sell at all)")
             gr.Markdown("- **expected_value**: margin × sale_probability (ranking key)")
-            gr.Markdown("- **expected_duration / prediction_q10·q50·q90**: predicted hours to sell")
+            gr.Markdown("- **expected_duration / prediction_q10·q50·q90**: predicted hours to sell (secondary; only meaningful given a sale)")
 
             with gr.Row():
                 min_profit_input = gr.Number(label="Minimum Margin After Fees (gold)", value=100, minimum=0, step=100)
                 min_sale_probability_input = gr.Slider(label="Minimum Sale Probability", minimum=0.0, maximum=1.0, value=0.5, step=0.05)
-                hold_horizon_input = gr.Slider(label="Hold Horizon (hours)", minimum=1, maximum=24, value=12, step=1)
+                hold_horizon_input = gr.Slider(label="Hold Horizon (hours; 48 = will it sell at all)", minimum=1, maximum=48, value=48, step=1)
 
             generate_button = gr.Button("Generate Recommendations")
             result_text = gr.Markdown()
@@ -472,7 +495,7 @@ def create_ui():
             gr.Markdown("- **predicted_hours_q10**: 10th percentile (optimistic timing)")
             gr.Markdown("- **predicted_hours_q50**: 50th percentile (median hours to sale)")
             gr.Markdown("- **predicted_hours_q90**: 90th percentile (pessimistic timing)")
-            gr.Markdown("- **sale_probability**: Probability (0-1) that the item will sell")
+            gr.Markdown("- **sale_probability**: P(genuine sale, is_sold) over the full listing window — will it sell at all (post-hoc calibrated against the is_sold proxy when a calibrator is present)")
 
             with gr.Row():
                 flip_item_search = gr.Textbox(label="Search by Item ID", placeholder="Enter item ID...")
@@ -561,7 +584,8 @@ def create_ui():
                     pred_time,
                     stats,
                     max_hours_back=max_hours_back,
-                    max_sequence_length=max_sequence_length
+                    max_sequence_length=max_sequence_length,
+                    calibrator=sale_calibrator,
                 )
 
                 if prediction_df.empty:

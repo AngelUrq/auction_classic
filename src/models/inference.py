@@ -1,3 +1,6 @@
+import pickle
+from pathlib import Path
+
 import torch
 import numpy as np
 import pandas as pd
@@ -8,6 +11,28 @@ from src.models.survival import survival_pmf
 
 MAX_BONUSES = 9
 MAX_MODIFIERS = 11
+
+# Post-hoc sale-probability calibrator (isotonic map fit on held-out fresh auctions; built and saved
+# from notebooks/transformer_evaluation.ipynb). Stored as plain {'x', 'y'} threshold arrays so we
+# apply it with np.interp — no sklearn/pickle-version dependency at serve time.
+DEFAULT_CALIBRATOR_PATH = Path(__file__).resolve().parents[2] / "generated" / "sale_calibrator.pkl"
+
+
+def load_sale_calibrator(path=DEFAULT_CALIBRATOR_PATH):
+    """Load the saved sale-probability calibrator as a callable, or None if the file is absent.
+
+    Returns a function mapping raw P(sold) values (scalar or array) to calibrated ones via the saved
+    isotonic threshold points (np.interp, clipped at the ends). The caller loads it once and passes
+    it to predict_dataframe(..., calibrator=...); predict_dataframe applies it only if given.
+    """
+    path = Path(path)
+    if not path.exists():
+        return None
+    with open(path, "rb") as f:
+        blob = pickle.load(f)
+    x = np.asarray(blob["x"], dtype=np.float64)
+    y = np.asarray(blob["y"], dtype=np.float64)
+    return lambda p: np.interp(np.asarray(p, dtype=np.float64), x, y)
 
 
 def predict_pmf(model, df_item, feature_stats, max_hours_back=0, max_sequence_length=4096):
@@ -102,7 +127,7 @@ def predict_pmf(model, df_item, feature_stats, max_hours_back=0, max_sequence_le
     return pmf, df_item
 
 
-def predict_dataframe(model, df_auctions, prediction_time, feature_stats, max_hours_back=0, max_sequence_length=4096, quick_sale_threshold_hours=12, show_progress=False):
+def predict_dataframe(model, df_auctions, prediction_time, feature_stats, max_hours_back=0, max_sequence_length=4096, quick_sale_threshold_hours=None, show_progress=False, calibrator=None):
     """Run inference for all items in df_auctions and return predictions at snapshot_offset==0.
 
     Args:
@@ -112,14 +137,20 @@ def predict_dataframe(model, df_auctions, prediction_time, feature_stats, max_ho
         feature_stats: Dict with precomputed means/stds for normalization.
         max_hours_back: Maximum historical context window in hours.
         max_sequence_length: Maximum sequence length per item (crops oldest).
-        quick_sale_threshold_hours: Number of hours used to compute sale_probability.
-            P(duration < threshold) — proxy for sale probability. Tune this value
-            to calibrate the signal; lower = stricter (higher precision).
+        quick_sale_threshold_hours: Horizon in hours for sale_probability = P(duration < threshold).
+            None (default) uses the full window => P(sold ever) = 1 - S(T_max), i.e. "will it sell at
+            all". A smaller value restricts to a shorter horizon (stricter / higher precision).
+        calibrator: Optional callable mapping raw P(sold) -> calibrated P(sold) (e.g. from
+            load_sale_calibrator()). If given, sale_probability is passed through it and the
+            uncalibrated value is kept as raw_sale_probability. If None (default), no
+            calibration is applied. The map is monotonic, so quantiles/ranking are unaffected.
 
     Returns:
         df_out: Copy of the filtered DataFrame with added columns:
             prediction_q10, prediction_q50, prediction_q90 (hours),
-            expected_duration (hours), sale_probability.
+            expected_duration (hours), sale_probability. When a calibrator is given,
+            sale_probability is the calibrated value and raw_sale_probability holds the
+            uncalibrated model output.
     """
     model.eval()
 
@@ -158,7 +189,8 @@ def predict_dataframe(model, df_auctions, prediction_time, feature_stats, max_ho
         q50 = (cdf >= 0.5).float().argmax(dim=-1)
         q90 = (cdf >= 0.9).float().argmax(dim=-1)
         expected_duration = (conditional_pmf * time_bins).sum(dim=-1)  # (S,)
-        threshold = int(min(quick_sale_threshold_hours, n_sale_bins))
+        # None => full window (all bins) = P(sold ever); otherwise cap the horizon at the bin count.
+        threshold = n_sale_bins if quick_sale_threshold_hours is None else int(min(quick_sale_threshold_hours, n_sale_bins))
         sale_probability = pmf[:, :threshold].sum(dim=-1)              # (S,) unconditional P(T < threshold)
 
         idx_now = df_item.index[mask_now]
@@ -168,7 +200,20 @@ def predict_dataframe(model, df_auctions, prediction_time, feature_stats, max_ho
         df_out.loc[idx_now, "expected_duration"] = expected_duration[mask_now].numpy()
         df_out.loc[idx_now, "sale_probability"]  = sale_probability[mask_now].numpy()
 
-    for col in ["buyout", "bid", "time_left", "listing_age", "prediction_q10", "prediction_q50", "prediction_q90", "expected_duration", "sale_probability"]:
+    # Post-hoc calibration: if a calibrator callable was passed, remap sale_probability through it so
+    # the number matches the observed is_sold rate. Monotonic => leaves q10/q50/q90 and the ranking
+    # untouched; only the probability value changes. The uncalibrated output is kept as
+    # raw_sale_probability.
+    round_cols = ["buyout", "bid", "time_left", "listing_age", "prediction_q10", "prediction_q50", "prediction_q90", "expected_duration", "sale_probability"]
+    if calibrator is not None:
+        scored = df_out["sale_probability"].notna()
+        df_out["raw_sale_probability"] = df_out["sale_probability"]
+        df_out.loc[scored, "sale_probability"] = calibrator(
+            df_out.loc[scored, "sale_probability"].to_numpy(dtype=float)
+        )
+        round_cols.append("raw_sale_probability")
+
+    for col in round_cols:
         if col in df_out.columns:
             df_out[col] = np.round(df_out[col].astype(float), 2)
 

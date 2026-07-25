@@ -5,9 +5,13 @@ Gradio Recommendations tab (``ui/app.py``), so the two never drift. Intended to
 be run hourly (just after the data refresh) from cron; for now it only prints
 the ranked flips, but a notification hook can be added at the end later.
 
+sale_probability is the model's P(genuine sale, is_sold) over the hold horizon (default 48h =
+"will it sell at all"), post-hoc calibrated against the is_sold proxy when
+generated/sale_calibrator.pkl exists (raw/optimistic otherwise). Read expected_value as a ranking.
+
 Usage:
     python scripts/generate_recommendations.py \
-        --min-profit 100 --min-sale-probability 0.5 --hold-horizon 12 --top 25
+        --min-profit 100 --min-sale-probability 0.6 --hold-horizon 48 --top 25
 """
 
 import argparse
@@ -42,13 +46,15 @@ def _parse_args() -> argparse.Namespace:
         "--min-sale-probability",
         type=float,
         default=0.6,
-        help="Minimum P(sells within hold horizon) to keep a flip (default: 0.5).",
+        help="Minimum P(genuine sale, is_sold, within the hold horizon) to keep a flip. "
+             "Calibrated against the is_sold proxy when a calibrator is present (default: 0.6).",
     )
     parser.add_argument(
         "--hold-horizon",
         type=float,
-        default=8.0,
-        help="Hold horizon in hours for the sale-probability estimate (default: 12).",
+        default=48.0,
+        help="Hold horizon in hours for the sale-probability estimate; 48 = full window = "
+             "P(sold at all) (default: 48).",
     )
     parser.add_argument(
         "--top",
