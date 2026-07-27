@@ -409,6 +409,21 @@ class AuctionTransformer(L.LightningModule):
         listing_age = torch.cat(self._val_listing_age)
         predicted_pmfs = torch.cat(self._val_predicted_pmfs)
 
+        if not events.any():
+            # C-index, MAE and calibration are all defined only over observed sale events,
+            # and a short validation pass can contain none. This is systematic at
+            # max_hours_back=0: sequence lengths collapse to small integers, so the
+            # unshuffled val BucketBatchSampler yields its length-1 bucket first — items
+            # with a single lone listing, which are illiquid (>80% is_expired, ~0 sales).
+            # The sanity check's 2 batches are then all censored, torchsurv raises
+            # "All samples are censored", and calibration would divide by zero.
+            # Skip the pass's metrics instead of crashing or logging NaN.
+            logger.warning(
+                "Skipping validation metrics: no sale events among %d accumulated rows.",
+                events.shape[0],
+            )
+            return
+
         c_index = self._compute_c_index(events, observed_durations, expected_durations)
         self.log('val/c_index', c_index, on_epoch=True, prog_bar=True)
 
